@@ -1,0 +1,22 @@
+name: 質問・要望
+description: 設定の書き方の相談や、こんな機能がほしいという話はこちら
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        設定ファイルの書き方は [extrun-config-format.md](https://github.com/pirukabocha/extrun/blob/main/extrun-config-format.md)（仕様）と [extrun-recipes.md](https://github.com/pirukabocha/extrun/blob/main/extrun-recipes.md)（設定例集）にまとめてあります。先にそちらもご覧ください。
+
+  - type: textarea
+    id: body
+    attributes:
+      label: 内容
+      description: やりたいこと、試したこと、うまくいかなかったことを書いてください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: 書いてみた設定（あれば）
+      render: text

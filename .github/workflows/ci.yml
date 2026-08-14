@@ -1,0 +1,49 @@
+# 書式・Lint・テストを windows-latest で通す。
+#
+# テストは extrun-config.txt をフィクスチャとして読むので、サンプル設定の
+# 書式エラーもここで落ちる。仕上げに、ビルドした exe で --check を実行して
+# 実際の終了コードまで確かめる。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: 書式・Lint・テスト
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust ツールチェーンを用意
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustc --version
+
+      - name: 書式
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: テスト
+        run: cargo test
+
+      - name: リリースビルド
+        run: cargo build --release
+
+      - name: サンプル設定を --check で検証
+        # extrun.exe はコンソールを持たないため、pwsh は終了を待たない。
+        # 終了コードを見るには Start-Process -Wait -PassThru を使う。
+        run: |
+          Copy-Item extrun-config.txt target\release\
+          $proc = Start-Process .\target\release\extrun.exe -ArgumentList '--check' -Wait -PassThru -NoNewWindow
+          if ($proc.ExitCode -ne 0) {
+            throw "extrun-config.txt にエラーがあります (exit $($proc.ExitCode))"
+          }

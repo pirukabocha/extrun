@@ -1,0 +1,241 @@
+# =====================================================================
+# ExtRun 設定ファイル（サンプル）
+#
+# extrun.exe と同じフォルダに extrun-config.txt という名前で配置（UTF-8）。
+# 書式の詳細は extrun-config-format.md を参照してください。
+#
+# このサンプルは Windows に最初から入っているコマンドだけで動くように
+# 作ってあります。追加のインストールなしでそのまま試せます。
+# （そのぶん内容は控えめです。お使いのアプリのパスを足していってください）
+#
+# ffmpeg / 7-Zip / ImageMagick / VS Code などを使った実用的な設定例は
+# extrun-recipes.md（レシピ集）にまとめてあります。
+#
+# 編集したら extrun.exe --check で書式を確認できます。
+# =====================================================================
+
+
+# --- パスの別名 ------------------------------------------------------
+# 何度も出てくるフォルダやアプリはここにまとめておくと、
+# 引っ越しのときに 1 行直すだけで済みます。
+
+@win = C:\Windows
+@sys = @win\System32
+
+@notepad    = @win\notepad.exe
+@explorer   = @win\explorer.exe
+@cmd        = @sys\cmd.exe
+@powershell = @sys\WindowsPowerShell\v1.0\powershell.exe
+@rundll32   = @sys\rundll32.exe
+@attrib     = @sys\attrib.exe
+@tar        = @sys\tar.exe
+
+
+# --- 拡張子セットの別名 ----------------------------------------------
+# セクション見出しや、項目ごとの [...] の中で使えます。
+
+@画像     = .png .jpg .jpeg .gif .bmp .tif .tiff .ico
+@音声     = .wav .mp3 .m4a .flac .wma .opus
+@動画     = .mp4 .mkv .avi .wmv .mov
+@書庫     = .zip .tar .gz .tgz
+@テキスト = .txt .md .log .csv .ini .json .xml .yaml .yml
+
+
+# =====================================================================
+# 画像
+# =====================================================================
+# 画像を扱う項目は PowerShell から .NET の System.Drawing を呼んでいます。
+# 引数全体を "..." で囲み、中では '...' を使うのがコツです。
+[@画像]
+
+開く
+> 既定のアプリで開く  | @explorer | $p
+> プログラムから開く   | @rundll32 | shell32.dll,OpenAs_RunDLL $p
+
+# -NoExit を付けると実行後もウィンドウが残るので、結果を読めます。
+# $n（名前）は '...' で囲んで PowerShell の文字列にしています。
+画像のサイズを調べる
+ | @powershell
+ | -NoProfile -NoExit -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); '$n : ' + ^$i.Width + ' x ' + ^$i.Height; ^$i.Dispose()"
+
+# 名前の直後の [-...] は「継承した拡張子からの引き算」。
+# .png を対象から外すので、PNG のときだけ「PNG に変換」は出ません。
+形式を変換
+> PNG に変換 [-.png]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
+> JPEG に変換 [-.jpg -.jpeg]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.jpg',[System.Drawing.Imaging.ImageFormat]::Jpeg); ^$i.Dispose()"
+> BMP に変換 [-.bmp]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.bmp',[System.Drawing.Imaging.ImageFormat]::Bmp); ^$i.Dispose()"
+> ---
+# [-] の付かない指定は「継承を無視して完全に置き換える」。
+# GIF のときだけ出ます。
+> 1 コマ目を PNG で取り出す [.gif]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p_frame1.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
+
+# $d（親フォルダ）と $a（拡張子なしの名前）を組み合わせて出力先を作ります。
+長辺 1280px に縮小する [-.ico]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$r=[Math]::Min(1,1280/[Math]::Max(^$i.Width,^$i.Height)); ^$b=[System.Drawing.Bitmap]::new(^$i,[int](^$i.Width*^$r),[int](^$i.Height*^$r)); ^$b.Save('$d\$a_small.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$b.Dispose(); ^$i.Dispose()"
+
+
+# =====================================================================
+# 音声・動画
+# =====================================================================
+# セクション見出しには別名を並べて書けます。
+[@音声 @動画]
+
+既定のアプリで再生 | @explorer | $p
+プログラムから開く  | @rundll32 | shell32.dll,OpenAs_RunDLL $p
+
+# ^| は「引数の中の縦棒」。PowerShell のパイプをそのまま書けます。
+ファイル情報を表示
+ | @powershell
+ | -NoProfile -NoExit -Command "Get-Item -LiteralPath '$p' ^| Format-List Name, Length, CreationTime, LastWriteTime"
+
+
+# =====================================================================
+# 書庫
+# =====================================================================
+# Windows 10 1803 以降には tar.exe が標準で入っていて、
+# zip / tar / tar.gz を読み書きできます（rar と 7z は非対応）。
+#
+# 別名は空白あるいは \ / | / [ / ] / ^ / @ で終わります。
+# そのため下記の引数内の '@sys\tar.exe' は '@tar' とは書けません。
+# 例のように '@sys\tar.exe' と \ を挟むか、囲まずに書きます。
+[@書庫]
+
+同じ名前のフォルダに展開
+ | @powershell
+ | -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$-p' ^| Out-Null; & '@sys\tar.exe' -x -f '$p' -C '$-p'"
+
+このフォルダに展開 | @tar | -x -f $p -C $d
+
+中身を一覧する
+ | @powershell
+ | -NoProfile -NoExit -Command "& '@sys\tar.exe' -t -f '$p'"
+
+# .cab は tar では扱えないので expand.exe に差し替えます（完全置換）。
+CAB を展開する [.cab]
+ | @powershell
+ | -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$-p' ^| Out-Null; & '@sys\expand.exe' '$p' -F:* '$-p'"
+
+
+# =====================================================================
+# テキスト・データ
+# =====================================================================
+[@テキスト]
+
+メモ帳で開く | @notepad
+
+文字数・行数を数える
+ | @powershell
+ | -NoProfile -NoExit -Command "'$n'; '行数 : ' + (Get-Content -LiteralPath '$p').Count; '文字数 : ' + (Get-Content -LiteralPath '$p' -Raw).Length"
+
+# + を付けると、選択したすべてのファイルが 1 つのプロセスに渡されます
+# （付けない場合はファイルごとに別プロセスが起動します）。
++ まとめて 1 つのテキストに | @cmd | /c type $p > $d\merged.txt
+
+
+# =====================================================================
+# すべてのファイル
+# =====================================================================
+[file]
+
+# 先頭・末尾のセパレーターは表示するときに自動で取り除かれます。
+---
+
+親フォルダを開いて選択 | @explorer | /select,$p
+
+読み取り専用・隠し属性を解除
+ | @attrib
+ | -r -s -h $p
+
+# ^$ は「プレースホルダーにしない $」。
+# $p（ExtRun が置き換える）と ^$_（PowerShell の変数）が同居できます。
+SHA256 を書き出す
+ | @powershell
+ | -NoProfile -Command "Get-FileHash -LiteralPath '$p' -Algorithm SHA256 ^| ForEach-Object { ^$_.Hash } ^| Set-Content -LiteralPath '$-p.sha256'"
+
+---
+
+
+# =====================================================================
+# フォルダ
+# =====================================================================
+[folder]
+
+開く
+> エクスプローラで開く | @explorer | $p
+> ---
+> PowerShell で開く
+ | @powershell
+ | -NoExit -Command "Set-Location -LiteralPath '$p'"
+# 引数欄を空（行末の | だけ）にすると引数なしで起動します。
+# :dir は作業フォルダの指定で、プレースホルダーも使えます。
+> コマンドプロンプトで開く | @cmd |
+ :dir $p
+
+---
+
+# $f は親フォルダの名前。出力先のファイル名に使っています。
+ファイル一覧を書き出す
+ | @powershell
+ | -NoProfile -Command "Get-ChildItem -LiteralPath '$p' -Recurse -File ^| ForEach-Object { ^$_.FullName } ^| Set-Content -LiteralPath '$d\$f-filelist.txt'"
+
+# ^@ は「別名として解決しない @」。PowerShell の配列 @( ) をそのまま書けます。
+画像ファイルの数を数える
+ | @powershell
+ | -NoProfile -NoExit -Command "^$e=^@('.png','.jpg','.jpeg','.gif','.bmp'); (Get-ChildItem -LiteralPath '$p' -Recurse -File ^| Where-Object { ^$e -contains ^$_.Extension }).Count"
+
+# セパレーターも拡張子を持てます。
+--- [file folder]
+
+# セクションは [folder] でも、項目側の指定でファイルも対象にできます。
+# セクションの指定は「既定値」であって「絞り込み条件」ではありません。
+サイズを調べる [file folder]
+ | @powershell
+ | -NoProfile -NoExit -Command "'$n'; '{0:N1} MB' -f ((Get-ChildItem -LiteralPath '$p' -Recurse -File -Force -ErrorAction SilentlyContinue ^| Measure-Object Length -Sum).Sum / 1MB)"
+
+
+# =====================================================================
+# ファイルとフォルダの両方
+# =====================================================================
+[file folder]
+
+---
+
+圧縮
+> ZIP
+# -C で親フォルダに移動して名前だけを渡すと、書庫の中がフラットになります。
+>> 個別に圧縮 | @tar | -a -c -f $-p.zip -C $d $n
+>> + まとめて 1 つに（フォルダ構成を保持） | @tar | -a -c -f $d\archive.zip $p
+> TAR.GZ
+>> 個別に圧縮 | @tar | -a -c -f $-p.tar.gz -C $d $n
+>> + まとめて 1 つに（フォルダ構成を保持） | @tar | -a -c -f $d\archive.tar.gz $p
+
+---
+
+パスをコピーする
+ | @powershell
+ | -NoProfile -Command "Set-Clipboard -Value '$p'"
+
+
+# =====================================================================
+# 覚え書き：^ によるエスケープ
+#
+#   ^>  ^+   記号で始まる項目名        例）^> 引用する | @notepad
+#   ^|       引数の中の縦棒
+#   ^:       行頭の : を名前付きフィールドにしない
+#   ^@       別名として解決しない @    例）^@('.png','.jpg')
+#   ^$       プレースホルダーにしない $
+#   ^-       拡張子欄で引き算にしない -
+#   ^#  ^[  ^]  ^^   それぞれの文字そのもの
+#
+# ^ は特殊文字の前に置いたときだけエスケープとして働きます。
+# C:\Foo^Bar\app.exe のようなパスはそのまま書けます。
+# =====================================================================

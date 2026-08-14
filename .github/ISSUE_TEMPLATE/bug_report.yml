@@ -1,0 +1,61 @@
+name: 不具合の報告
+description: 動作がおかしいときはこちら
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ご報告ありがとうございます。設定ファイルの書き方の相談は「質問・要望」のほうが向いています。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 何が起きましたか
+      description: 期待した動作と、実際に起きたことを書いてください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      placeholder: |
+        1. .png を 2 つ選んで ExtRun に渡す
+        2. 「まとめて圧縮」を選ぶ
+        3. 1 つしか圧縮されない
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: ExtRun のバージョン
+      description: "`extrun.exe --version` の出力"
+      placeholder: ExtRun 1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows のバージョン
+      description: "`winver` で表示されるもの"
+      placeholder: Windows 11 24H2 (26100.xxxx)
+    validations:
+      required: true
+
+  - type: textarea
+    id: check
+    attributes:
+      label: extrun.exe --check の出力
+      description: そのまま貼り付けてください。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: 設定ファイルの該当部分
+      description: 問題が起きた項目の行を貼り付けてください（パスは伏せてかまいません）。
+      render: text

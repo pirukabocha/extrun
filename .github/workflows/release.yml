@@ -1,0 +1,44 @@
+# v1.2.3 のようなタグを push すると、配布用の zip を作って Release に添付する。
+#
+# 作られるのは下書き（draft）なので、内容を確認してから GitHub 上で公開する。
+# zip の中身とバージョンの整合は packaging\build-release.ps1 が見ている。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 配布用 zip を作って Release に添付
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust ツールチェーンを用意
+        run: |
+          rustup update stable
+          rustup default stable
+          rustc --version
+
+      - name: タグと Cargo.toml のバージョンが一致するか確認
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object { $_.name -eq 'extrun' }).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "タグ $env:GITHUB_REF_NAME と Cargo.toml のバージョン $version が一致しません"
+          }
+
+      - name: 配布用 zip を作成
+        run: .\packaging\build-release.ps1
+
+      - name: Release に添付（下書き）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem dist\*.zip, dist\*.sha256 | ForEach-Object { $_.FullName }
+          gh release create $env:GITHUB_REF_NAME --draft --generate-notes --title "ExtRun $env:GITHUB_REF_NAME" $assets

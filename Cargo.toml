@@ -1,0 +1,41 @@
+[package]
+name = "extrun"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.77"
+description = "ファイルやフォルダを拡張子ごとのコンテキストメニューから素早くアプリで開く、Windows 向けの軽量ランチャー"
+repository = "https://github.com/pirukabocha/extrun"
+license = "MIT"
+readme = "README.md"
+keywords = ["windows", "launcher", "contextmenu", "shell", "win32"]
+categories = ["command-line-utilities", "os::windows-apis"]
+# 配布は GitHub Releases の zip なので crates.io には公開しない
+publish = false
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_Graphics_Gdi",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[[bin]]
+name = "extrun"
+path = "src/main.rs"
+
+# exe に VERSIONINFO を埋め込むためだけのビルド時依存。
+# 実行時の依存は windows-sys のみで、バイナリサイズにも影響しない。
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3.0.11"
