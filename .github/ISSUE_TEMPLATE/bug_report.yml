@@ -31,7 +31,7 @@ body:
     attributes:
       label: ExtRun のバージョン
       description: "`extrun.exe --version` の出力"
-      placeholder: ExtRun 1.0.0
+      placeholder: ExtRun 1.2.3
     validations:
       required: true
 

@@ -2,7 +2,7 @@
 メニューの作成と表示 (Win32 API版)
 */
 
-use crate::config::{Config, MenuItem};
+use crate::config::{Config, MenuItem, MenuPosition};
 use crate::placeholder::PathPlaceholders;
 use crate::Target;
 use std::collections::{HashMap, HashSet};
@@ -13,8 +13,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    MONITOR_DEFAULTTOPRIMARY,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_DOWN,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 /// メニューアクション
@@ -51,6 +58,10 @@ impl GlobalState {
 
 /// メニューを作成して表示
 pub fn create_and_show_menu(config: &Config, targets: &[Target]) {
+    // 自分が前面に出る前の前面ウィンドウ。表示位置の基準に使うので、
+    // SetForegroundWindow より前に取らないと自分自身になってしまう
+    let owner = unsafe { GetForegroundWindow() };
+
     // グローバル状態を作成
     let state = Arc::new(Mutex::new(GlobalState::new()));
     let shared_targets = Arc::new(targets.to_vec());
@@ -118,22 +129,33 @@ pub fn create_and_show_menu(config: &Config, targets: &[Target]) {
     // 閉じるメニューを追加
     append_separator(hmenu);
     let close_id = state.lock().unwrap().add_action(MenuAction::Close);
-    append_menu_item(hmenu, close_id, "閉じる", MF_STRING);
+    // Esc でも閉じられるので、アクセスキーは予約しない
+    append_menu_item(hmenu, close_id, "閉じる", None);
 
-    // カーソル位置を取得
-    let mut cursor_pos = POINT { x: 0, y: 0 };
-    unsafe { GetCursorPos(&mut cursor_pos) };
+    // メニューを出す位置を決める
+    let (point, align) = menu_anchor(config.settings.menu_position, owner);
 
     // ウィンドウをフォアグラウンドに設定（メニュー表示のため必要）
     unsafe { SetForegroundWindow(hwnd) };
+
+    // 先頭項目を選択した状態で開く
+    //
+    // タイマーを仕掛けておくと、メニューのモーダルループが立ち上がって手が空いた
+    // ところで WM_TIMER が `window_proc` に配送される。そこで初めてメニューが
+    // 出ていると分かるので、キー入力を差し込む。
+    //
+    // TrackPopupMenu は同期的に戻るので、仕掛けるのは呼ぶ前でなければならない。
+    if config.settings.select_first {
+        unsafe { SetTimer(hwnd, SELECT_FIRST_TIMER, 0, None) };
+    }
 
     // ポップアップメニューを表示
     let cmd = unsafe {
         TrackPopupMenu(
             hmenu,
-            TPM_RETURNCMD | TPM_NONOTIFY,
-            cursor_pos.x,
-            cursor_pos.y,
+            TPM_RETURNCMD | TPM_NONOTIFY | align,
+            point.x,
+            point.y,
             0,
             hwnd,
             null_mut(),
@@ -154,6 +176,91 @@ pub fn create_and_show_menu(config: &Config, targets: &[Target]) {
     unsafe { DestroyWindow(hwnd) };
 }
 
+/// メニューを出す座標と配置フラグを決める
+///
+/// `owner` は ExtRun が前面に出る前の前面ウィンドウ。基準にできないときは
+/// 画面中央 → カーソル位置の順に落とす。
+///
+/// `TPM_CENTERALIGN` / `TPM_VCENTERALIGN` を付けると、渡した座標を左上ではなく
+/// 中心として扱ってくれる。メニューの幅と高さを自前で測る必要はない。
+/// 画面からはみ出す分も Windows が自動で寄せる。
+fn menu_anchor(position: MenuPosition, owner: HWND) -> (POINT, u32) {
+    const CENTERED: u32 = TPM_CENTERALIGN | TPM_VCENTERALIGN;
+    // 渡した座標をメニューの左上に置く（どちらも 0 だが意図を残す）
+    const TOP_LEFT: u32 = TPM_LEFTALIGN | TPM_TOPALIGN;
+
+    match position {
+        MenuPosition::Point { x, y } => (POINT { x, y }, TOP_LEFT),
+        MenuPosition::Window => match window_center(owner) {
+            Some(point) => (point, CENTERED),
+            None => menu_anchor(MenuPosition::Screen, owner),
+        },
+        MenuPosition::Screen => match work_area_center(owner) {
+            Some(point) => (point, CENTERED),
+            None => menu_anchor(MenuPosition::Cursor, owner),
+        },
+        MenuPosition::Cursor => (cursor_point(), TOP_LEFT),
+    }
+}
+
+/// マウスカーソルの位置
+fn cursor_point() -> POINT {
+    let mut point = POINT { x: 0, y: 0 };
+    unsafe { GetCursorPos(&mut point) };
+    point
+}
+
+/// ウィンドウの中心
+///
+/// 最小化されたウィンドウの矩形は `-32000` 付近を返すので、そのまま使うと
+/// 画面の外にメニューが出る。`IsIconic` で先に弾く。
+fn window_center(hwnd: HWND) -> Option<POINT> {
+    if hwnd.is_null() || unsafe { IsIconic(hwnd) } != 0 {
+        return None;
+    }
+
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return None;
+    }
+
+    Some(rect_center(&rect))
+}
+
+/// ウィンドウがあるモニタの作業領域（タスクバーを除く）の中心
+fn work_area_center(hwnd: HWND) -> Option<POINT> {
+    let monitor = if hwnd.is_null() {
+        unsafe { MonitorFromPoint(cursor_point(), MONITOR_DEFAULTTOPRIMARY) }
+    } else {
+        unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) }
+    };
+
+    if monitor.is_null() {
+        return None;
+    }
+
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        return None;
+    }
+
+    Some(rect_center(&info.rcWork))
+}
+
+/// 矩形の中心（幅が奇数のときは切り捨て）
+fn rect_center(rect: &RECT) -> POINT {
+    POINT {
+        x: rect.left + (rect.right - rect.left) / 2,
+        y: rect.top + (rect.bottom - rect.top) / 2,
+    }
+}
+
 /// メニュー項目を追加
 fn add_menu_items(
     hmenu: HMENU,
@@ -167,27 +274,27 @@ fn add_menu_items(
         } else if item.has_submenu() {
             let submenu = unsafe { CreatePopupMenu() };
             add_menu_items(submenu, &item.submenu, Arc::clone(&targets), state);
-            append_submenu(hmenu, submenu, &item.name);
+            append_submenu(hmenu, submenu, &item.name, item.accesskey);
         } else {
             let id = state.lock().unwrap().add_action(MenuAction::ExecuteApp {
                 item: item.clone(),
                 targets: Arc::clone(&targets),
             });
-            append_menu_item(hmenu, id, &item.name, MF_STRING);
+            append_menu_item(hmenu, id, &item.name, item.accesskey);
         }
     }
 }
 
 /// メニュー項目を追加（ヘルパー関数）
-fn append_menu_item(hmenu: HMENU, id: u16, text: &str, flags: u32) {
-    let text_wide = to_wide_string(text);
-    unsafe { AppendMenuW(hmenu, flags, id as usize, text_wide.as_ptr()) };
+fn append_menu_item(hmenu: HMENU, id: u16, name: &str, accesskey: Option<usize>) {
+    let label = to_label_wide(name, accesskey);
+    unsafe { AppendMenuW(hmenu, MF_STRING, id as usize, label.as_ptr()) };
 }
 
 /// サブメニューを追加（ヘルパー関数）
-fn append_submenu(hmenu: HMENU, submenu: HMENU, text: &str) {
-    let text_wide = to_wide_string(text);
-    unsafe { AppendMenuW(hmenu, MF_POPUP, submenu as usize, text_wide.as_ptr()) };
+fn append_submenu(hmenu: HMENU, submenu: HMENU, name: &str, accesskey: Option<usize>) {
+    let label = to_label_wide(name, accesskey);
+    unsafe { AppendMenuW(hmenu, MF_POPUP, submenu as usize, label.as_ptr()) };
 }
 
 /// セパレーターを追加（ヘルパー関数）
@@ -195,19 +302,82 @@ fn append_separator(hmenu: HMENU) {
     unsafe { AppendMenuW(hmenu, MF_SEPARATOR, 0, null_mut()) };
 }
 
+/// 表示名を Win32 のメニューラベルに変換する
+///
+/// Win32 は `&` をアクセスキーの目印として食べてしまう。表示したい `&` は
+/// `&&` に二重化し、アクセスキーの位置にだけ `&` を挿し込む。
+/// `MenuItem::name` は表示用の文字列なので、この変換はここでしか行わない。
+fn to_label_wide(name: &str, accesskey: Option<usize>) -> Vec<u16> {
+    // 大多数の項目はここで抜ける（`&` を含まず、アクセスキーも無い）
+    if accesskey.is_none() && !name.contains('&') {
+        return to_wide_string(name);
+    }
+
+    let mut label = String::with_capacity(name.len() + 2);
+    for (i, c) in name.char_indices() {
+        if Some(i) == accesskey {
+            label.push('&');
+        }
+        label.push(c);
+        if c == '&' {
+            label.push('&');
+        }
+    }
+    to_wide_string(&label)
+}
+
 /// 文字列をワイド文字列に変換
 fn to_wide_string(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(once(0)).collect()
 }
 
+/// 先頭項目を選択するために一度だけ発火させるタイマーの ID
+const SELECT_FIRST_TIMER: usize = 1;
+
 /// ウィンドウプロシージャ
+///
+/// ほぼ `DefWindowProcW` に委譲するだけだが、`select-first` のタイマーだけは
+/// ここで受ける。このタイマーは `select-first` が有効なときしか仕掛けないので、
+/// 届いた時点で「先頭を選択したい」と決まっている。
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if msg == WM_TIMER && wparam == SELECT_FIRST_TIMER {
+        KillTimer(hwnd, SELECT_FIRST_TIMER);
+        send_key(VK_DOWN);
+        return 0;
+    }
+
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// キーの押下と解放を 1 回ずつ送る
+///
+/// `PostMessageW` でオーナーウィンドウに投げても**メニューには届かない**。
+/// メニューは自分のモーダルループで本物のキー入力を読むので、メッセージ
+/// キューではなく入力そのものに差し込む必要がある。
+fn send_key(key: VIRTUAL_KEY) {
+    let mut input: [INPUT; 2] = unsafe { std::mem::zeroed() };
+
+    for (index, event) in input.iter_mut().enumerate() {
+        event.r#type = INPUT_KEYBOARD;
+        // 共用体のフィールドは書き込むだけなら安全（読み出しは unsafe）
+        event.Anonymous.ki.wVk = key;
+        if index == 1 {
+            event.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+        }
+    }
+
+    unsafe {
+        SendInput(
+            input.len() as u32,
+            input.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
 }
 
 /// メニュー項目をフィルタリング
@@ -575,7 +745,7 @@ mod tests {
         let config = sample_config();
         let menu = menu_for(&config, "file");
         assert!(!menu[0].is_separator());
-        assert_eq!(menu[0].name, "親フォルダを開いて選択");
+        assert_eq!(menu[0].name, "親フォルダを開いて選択 (S)");
         assert!(!menu.last().expect("項目がある").is_separator());
     }
 
@@ -588,26 +758,26 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "開く",
+                "開く (O)",
                 "画像のサイズを調べる",
-                "形式を変換",
+                "形式を変換 (C)",
                 "長辺 1280px に縮小する",
                 "---",
-                "親フォルダを開いて選択",
+                "親フォルダを開いて選択 (S)",
                 "読み取り専用・隠し属性を解除",
                 "SHA256 を書き出す",
                 "---",
                 "サイズを調べる",
                 "---",
-                "圧縮",
+                "圧縮 (Z)",
                 "---",
-                "パスをコピーする",
+                "パスをコピーする (P)",
             ]
         );
 
         // [-.jpg -.jpeg] と [.gif] の子は落ち、末尾に残るセパレーターも消える
         let convert = &menu[2];
-        assert_eq!(convert.name, "形式を変換");
+        assert_eq!(convert.name, "形式を変換 (C)");
         let children: Vec<&str> = convert
             .submenu
             .iter()
@@ -621,15 +791,15 @@ mod tests {
         let config = sample_config();
         let menu = menu_for(&config, "folder");
         let open = &menu[0];
-        assert_eq!(open.name, "開く");
+        assert_eq!(open.name, "開く (D)");
         let children: Vec<&str> = open.submenu.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(
             children,
             vec![
-                "エクスプローラで開く",
+                "エクスプローラで開く (E)",
                 "---",
-                "PowerShell で開く",
-                "コマンドプロンプトで開く",
+                "PowerShell で開く (P)",
+                "コマンドプロンプトで開く (C)",
             ]
         );
         // 引数欄を空にした項目は引数なし、:dir はプレースホルダーを保ったまま
@@ -642,7 +812,7 @@ mod tests {
         let config = sample_config();
         let menu = filter_menu_items(&config.apps, &[target(".txt"), target(".png")]);
         let names: Vec<&str> = menu.iter().map(|item| item.name.as_str()).collect();
-        assert!(names.contains(&"メモ帳で開く"));
+        assert!(names.contains(&"メモ帳で開く (N)"));
         assert!(names.contains(&"画像のサイズを調べる"));
     }
 
@@ -652,18 +822,57 @@ mod tests {
         let menu = menu_for(&config, "folder");
         let compress = menu
             .iter()
-            .find(|item| item.name == "圧縮")
+            .find(|item| item.name == "圧縮 (Z)")
             .expect("圧縮がある");
+        // 親が Z、子も Z。キーはメニューごとに独立しているので衝突しない
         let zip = compress
             .submenu
             .iter()
             .find(|item| item.name == "ZIP")
             .expect("ZIP がある");
+        assert_eq!(compress.accesskey_char(), Some('Z'));
+        assert_eq!(zip.accesskey_char(), Some('Z'));
         let single = &zip.submenu[0];
         let batch = &zip.submenu[1];
-        assert_eq!(single.name, "個別に圧縮");
+        assert_eq!(single.name, "個別に圧縮 (S)");
         assert!(!single.all_mode);
         assert!(batch.all_mode);
+    }
+
+    /// 表示名とキーの位置から、Win32 用のラベルを組み立て直せる
+    #[test]
+    fn アクセスキーはラベルに戻る() {
+        assert_eq!(
+            to_label_wide("開く (O)", Some("開く (".len())),
+            to_wide_string("開く (&O)")
+        );
+        assert_eq!(
+            to_label_wide("PNG に変換", Some(0)),
+            to_wide_string("&PNG に変換")
+        );
+    }
+
+    /// 表示したい `&` は Win32 に食われないように二重化する
+    #[test]
+    fn 名前の中のアンパサンドは二重化される() {
+        assert_eq!(
+            to_label_wide("Q&A のかたち", None),
+            to_wide_string("Q&&A のかたち")
+        );
+        // アクセスキーと素の `&` は同居できる
+        assert_eq!(
+            to_label_wide("Q&A (X)", Some("Q&A (".len())),
+            to_wide_string("Q&&A (&X)")
+        );
+    }
+
+    /// `&` もアクセスキーも無い名前は組み立てを通さない（大多数の項目）
+    #[test]
+    fn アクセスキーのない名前はそのまま() {
+        assert_eq!(
+            to_label_wide("メモ帳で開く", None),
+            to_wide_string("メモ帳で開く")
+        );
     }
 
     #[test]

@@ -11,10 +11,19 @@ use std::path::Path;
 pub const CONFIG_FILE_NAME: &str = "extrun-config.txt";
 
 /// エスケープ（`^`）の対象になる特殊文字
-const SPECIALS: &[u8] = b"^@$|:>+-#[]";
+///
+/// `placeholder.rs` も同じ定義を使う。引数のエスケープはパース時ではなく
+/// 実行時に解決されるので、2 か所で食い違うと `^X` が片方だけ素通りする。
+pub(crate) const SPECIALS: &[u8] = b"^@$|:>+-#[]&";
 
 /// 別名の入れ子の深さの上限
 const MAX_ALIAS_DEPTH: usize = 32;
+
+/// グローバル設定のセクション名（`[extrun]`）
+///
+/// 拡張子は `.` で始まる必要がある（`file` / `folder` だけが例外）ので、
+/// この名前は元々エラーになる書き方だった。予約しても既存の設定を壊さない。
+const SETTINGS_SECTION: &str = "extrun";
 
 /// 診断メッセージの種別
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +64,12 @@ impl Diag {
 #[derive(Debug, Clone, Default)]
 pub struct MenuItem {
     /// メニューに表示される名前
+    ///
+    /// アクセスキーの `&` は取り除き済み（`^&` は素の `&` に解決済み）。
+    /// Win32 に渡すラベルは `menu.rs` がここから組み立て直す。
     pub name: String,
+    /// アクセスキーの位置（`name` のバイト位置。そこには必ず ASCII の英数字がある）
+    pub accesskey: Option<usize>,
     /// 対象の拡張子（継承・引き算・置換を解決済み。空ならすべて対象）
     pub extensions: Vec<String>,
     /// 起動する実行ファイル
@@ -84,12 +98,47 @@ impl MenuItem {
     pub fn has_submenu(&self) -> bool {
         !self.submenu.is_empty()
     }
+
+    /// アクセスキーの文字（大文字に正規化。Win32 は大小を区別しない）
+    pub fn accesskey_char(&self) -> Option<char> {
+        let pos = self.accesskey?;
+        self.name[pos..]
+            .chars()
+            .next()
+            .map(|c| c.to_ascii_uppercase())
+    }
+}
+
+/// メニューを表示する位置
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MenuPosition {
+    /// マウスカーソルの位置（既定）
+    #[default]
+    Cursor,
+    /// 前面ウィンドウの中央
+    Window,
+    /// 画面（タスクバーを除く作業領域）の中央
+    Screen,
+    /// 画面座標を直接指定（物理ピクセル）
+    Point { x: i32, y: i32 },
+}
+
+/// アプリ全体のふるまい（`[extrun]` セクション）
+///
+/// 既定値は 1.0.0 までのふるまいと同じ（カーソル位置・選択なし）。
+#[derive(Debug, Clone, Default)]
+pub struct Settings {
+    /// メニューを表示する位置
+    pub menu_position: MenuPosition,
+    /// 先頭項目を選択した状態でメニューを開くか
+    pub select_first: bool,
 }
 
 /// 設定ファイルの内容
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub apps: Vec<MenuItem>,
+    pub settings: Settings,
 }
 
 /// パース結果（診断メッセージ付き）
@@ -212,6 +261,94 @@ fn unescape(text: &str) -> String {
 
     out.push_str(&text[chunk..]);
     out
+}
+
+/// アクセスキーになれる文字か（半角英数字）
+fn is_accesskey_char(b: Option<&u8>) -> bool {
+    matches!(b, Some(b) if b.is_ascii_alphanumeric())
+}
+
+/// エスケープを解決しつつ、アクセスキーの `&` を読み取る（名前用）
+///
+/// `unescape()` と 1 パスで兼ねる必要がある。先にエスケープだけを解決すると
+/// `^&` が `&` になったあとアクセスキーの目印として拾われてしまう。
+/// 引数の `^$` とプレースホルダーの関係と同じ理由。
+///
+/// 戻り値の 2 つ目は、アクセスキーの文字が表示名の何バイト目から始まるか。
+/// 有効な `&` が複数あれば最初のものだけを使い、残りはただの `&` として残す
+/// （`warn_accesskey` が別に警告する）。
+fn unescape_name(text: &str) -> (String, Option<usize>) {
+    if !text.contains('^') && !text.contains('&') {
+        return (text.to_string(), None);
+    }
+
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut accesskey = None;
+    let mut chunk = 0;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if let Some(len) = escape_len(bytes, i) {
+            out.push_str(&text[chunk..i]);
+            out.push(bytes[i + 1] as char);
+            i += len;
+            chunk = i;
+            continue;
+        }
+
+        // `&` の直後が半角英数字ならアクセスキー。目印の `&` は表示から落とす
+        if bytes[i] == b'&' && accesskey.is_none() && is_accesskey_char(bytes.get(i + 1)) {
+            out.push_str(&text[chunk..i]);
+            accesskey = Some(out.len());
+            i += 1;
+            chunk = i;
+            continue;
+        }
+
+        i += char_len(bytes[i]);
+    }
+
+    out.push_str(&text[chunk..]);
+    (out, accesskey)
+}
+
+/// アクセスキーの `&` の書き間違いを警告する（種類ごとに 1 フィールド 1 件）
+fn warn_accesskey(text: &str, line: u32, diags: &mut Vec<Diag>) {
+    let bytes = text.as_bytes();
+    let mut count = 0;
+    let mut warned_shape = false;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if let Some(len) = escape_len(bytes, i) {
+            i += len;
+            continue;
+        }
+
+        if bytes[i] == b'&' {
+            if is_accesskey_char(bytes.get(i + 1)) {
+                count += 1;
+                if count == 2 {
+                    diags.push(Diag::warning(
+                        line,
+                        "アクセスキーの & が複数あります（最初のものだけが有効です）".to_string(),
+                    ));
+                }
+            } else if !warned_shape {
+                warned_shape = true;
+                diags.push(Diag::warning(
+                    line,
+                    "アクセスキーの & の後ろは半角英数字にしてください（& そのものを書くには ^&）"
+                        .to_string(),
+                ));
+            }
+            i += 1;
+            continue;
+        }
+
+        i += char_len(bytes[i]);
+    }
 }
 
 /// 何もエスケープしていない `^` を警告する（1 フィールドにつき 1 件）
@@ -549,6 +686,111 @@ fn as_section(text: &str) -> Option<&str> {
     Some(inner)
 }
 
+/// 表示位置の値を解釈する
+///
+/// 設定ファイルの `menu-position` とコマンドラインの `--at` で共有する。
+/// 片方だけに書き方が増えるとずれるので、解釈はここ 1 か所に集める。
+///
+/// `X,Y` の座標は物理ピクセル。マルチモニタでは主モニタより左や上にある画面の
+/// 座標が負になるので、符号付きで受ける。
+pub fn parse_menu_position(value: &str) -> Option<MenuPosition> {
+    let value = value.trim();
+
+    for (keyword, position) in [
+        ("cursor", MenuPosition::Cursor),
+        ("window", MenuPosition::Window),
+        ("screen", MenuPosition::Screen),
+    ] {
+        if value.eq_ignore_ascii_case(keyword) {
+            return Some(position);
+        }
+    }
+
+    let (x, y) = value.split_once(',')?;
+    Some(MenuPosition::Point {
+        x: x.trim().parse().ok()?,
+        y: y.trim().parse().ok()?,
+    })
+}
+
+/// `yes` / `no` を解釈する
+pub fn parse_yes_no(value: &str) -> Option<bool> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("yes") {
+        Some(true)
+    } else if value.eq_ignore_ascii_case("no") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// `[extrun]` セクションの `名前 = 値` を読む
+fn parse_setting(
+    item: &ItemLine,
+    settings: &mut Settings,
+    seen: &mut Vec<String>,
+    diags: &mut Vec<Diag>,
+) {
+    let line = item.line;
+
+    if item.working_dir.is_some() {
+        diags.push(Diag::error(
+            line,
+            format!("[{}] の中では :dir を使えません", SETTINGS_SECTION),
+        ));
+    }
+
+    let Some((key, value)) = item.text.split_once('=') else {
+        diags.push(Diag::error(
+            line,
+            format!(
+                "[{}] の設定は 名前 = 値 の形で書きます: {}",
+                SETTINGS_SECTION, item.text
+            ),
+        ));
+        return;
+    };
+
+    let key = key.trim().to_ascii_lowercase();
+    let value = value.trim();
+
+    if seen.contains(&key) {
+        diags.push(Diag::error(line, format!("設定が重複しています: {}", key)));
+        return;
+    }
+
+    match key.as_str() {
+        "menu-position" => match parse_menu_position(value) {
+            Some(position) => settings.menu_position = position,
+            None => diags.push(Diag::error(
+                line,
+                format!(
+                    "menu-position の値が不正です（cursor / window / screen / X,Y）: {}",
+                    value
+                ),
+            )),
+        },
+        "select-first" => match parse_yes_no(value) {
+            Some(flag) => settings.select_first = flag,
+            None => diags.push(Diag::error(
+                line,
+                format!("select-first の値が不正です（yes / no）: {}", value),
+            )),
+        },
+        _ => {
+            diags.push(Diag::error(
+                line,
+                format!("[{}] に未知の設定があります: {}", SETTINGS_SECTION, key),
+            ));
+            return;
+        }
+    }
+
+    // 値が不正でも「書かれてはいた」ので重複判定には数える
+    seen.push(key);
+}
+
 /// セクションと項目からメニューを組み立てる
 fn build_menu(stmts: &[Stmt], aliases: &mut Aliases, diags: &mut Vec<Diag>) -> Config {
     let mut root: Vec<MenuItem> = Vec::new();
@@ -556,6 +798,10 @@ fn build_menu(stmts: &[Stmt], aliases: &mut Aliases, diags: &mut Vec<Diag>) -> C
     let mut stack: Vec<MenuItem> = Vec::new();
     let mut section: Option<Vec<String>> = None;
     let mut reported_missing_section = false;
+    let mut settings = Settings::default();
+    let mut seen_settings: Vec<String> = Vec::new();
+    // `[extrun]` の中にいるか。拡張子セクションが来ると抜ける
+    let mut in_settings = false;
 
     for stmt in stmts {
         match stmt {
@@ -563,11 +809,20 @@ fn build_menu(stmts: &[Stmt], aliases: &mut Aliases, diags: &mut Vec<Diag>) -> C
 
             Stmt::Section { line, spec } => {
                 close_submenus(&mut stack, 0, &mut root);
+                in_settings = spec.trim().eq_ignore_ascii_case(SETTINGS_SECTION);
+                if in_settings {
+                    continue;
+                }
                 let expanded = aliases.expand(spec, *line, diags);
                 section = Some(parse_extensions(&expanded, &[], false, *line, diags));
             }
 
             Stmt::Item(item) => {
+                if in_settings {
+                    parse_setting(item, &mut settings, &mut seen_settings, diags);
+                    continue;
+                }
+
                 let Some(section_ext) = section.as_ref() else {
                     if !reported_missing_section {
                         reported_missing_section = true;
@@ -606,7 +861,10 @@ fn build_menu(stmts: &[Stmt], aliases: &mut Aliases, diags: &mut Vec<Diag>) -> C
     }
 
     close_submenus(&mut stack, 0, &mut root);
-    Config { apps: root }
+    Config {
+        apps: root,
+        settings,
+    }
 }
 
 /// 階層 `depth` より深いサブメニューを閉じる
@@ -650,7 +908,9 @@ fn build_item(
     };
 
     warn_stray_caret(name_part, line, diags);
-    let name = unescape(&aliases.expand(name_part, line, diags));
+    let expanded = aliases.expand(name_part, line, diags);
+    warn_accesskey(&expanded, line, diags);
+    let (name, accesskey) = unescape_name(&expanded);
     let separator = name == "---";
 
     // パス
@@ -684,6 +944,8 @@ fn build_item(
 
     MenuItem {
         name,
+        // セパレーターは選べないのでアクセスキーを持たない
+        accesskey: if separator { None } else { accesskey },
         extensions,
         path,
         args,
@@ -927,6 +1189,233 @@ mod tests {
         assert_eq!(item.extensions, vec![".txt"]);
         assert!(!item.all_mode);
         assert_eq!(item.line, 2);
+    }
+
+    // -----------------------------------------------------------------
+    // グローバル設定（[extrun]）
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn 設定セクションを読める() {
+        let config = parse_ok("[extrun]\nmenu-position = window\nselect-first = yes");
+        assert_eq!(config.settings.menu_position, MenuPosition::Window);
+        assert!(config.settings.select_first);
+    }
+
+    #[test]
+    fn 設定を書かなければ既定値() {
+        let config = parse_ok("[.txt]\nA | C:\\a.exe");
+        assert_eq!(config.settings.menu_position, MenuPosition::Cursor);
+        assert!(!config.settings.select_first);
+    }
+
+    #[test]
+    fn 設定セクションはメニュー項目を作らない() {
+        let config = parse_ok("[extrun]\nmenu-position = screen\n[.txt]\nA | C:\\a.exe");
+        assert_eq!(config.apps.len(), 1);
+        assert_eq!(config.apps[0].name, "A");
+    }
+
+    /// 拡張子セクションと違い、設定はどこに書いても全体に効く
+    #[test]
+    fn 設定セクションはファイルのどこに書いてもよい() {
+        let config = parse_ok("[.txt]\nA | C:\\a.exe\n[extrun]\nselect-first = yes");
+        assert!(config.settings.select_first);
+        assert_eq!(config.apps.len(), 1);
+    }
+
+    /// 設定セクションのあとに拡張子セクションが来たら項目に戻る
+    #[test]
+    fn 拡張子セクションで設定セクションを抜ける() {
+        let config = parse_ok("[extrun]\nselect-first = yes\n[.txt]\nメモ帳 | C:\\a.exe");
+        assert!(config.settings.select_first);
+        assert_eq!(config.apps.len(), 1);
+        assert_eq!(config.apps[0].name, "メモ帳");
+    }
+
+    #[test]
+    fn 表示位置の値を解釈する() {
+        assert_eq!(parse_menu_position("cursor"), Some(MenuPosition::Cursor));
+        assert_eq!(parse_menu_position("window"), Some(MenuPosition::Window));
+        assert_eq!(parse_menu_position("screen"), Some(MenuPosition::Screen));
+        assert_eq!(parse_menu_position(" SCREEN "), Some(MenuPosition::Screen));
+        assert_eq!(
+            parse_menu_position("100,200"),
+            Some(MenuPosition::Point { x: 100, y: 200 })
+        );
+        assert_eq!(
+            parse_menu_position("100, 200"),
+            Some(MenuPosition::Point { x: 100, y: 200 })
+        );
+        // 主モニタより左や上にある画面の座標は負になる
+        assert_eq!(
+            parse_menu_position("-1920,-100"),
+            Some(MenuPosition::Point { x: -1920, y: -100 })
+        );
+    }
+
+    #[test]
+    fn 表示位置の不正な値は読めない() {
+        for value in ["", "middle", "100", "100,", "100,abc", "100,200,300"] {
+            assert_eq!(parse_menu_position(value), None, "{}", value);
+        }
+    }
+
+    #[test]
+    fn 未知の設定はエラー() {
+        let errors = error_messages("[extrun]\nmenu-postion = window");
+        assert!(
+            errors.iter().any(|m| m.contains("未知の設定")),
+            "{:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn 不正な設定値はエラー() {
+        let errors = error_messages("[extrun]\nmenu-position = middle");
+        assert!(
+            errors
+                .iter()
+                .any(|m| m.contains("menu-position の値が不正")),
+            "{:?}",
+            errors
+        );
+
+        let errors = error_messages("[extrun]\nselect-first = maybe");
+        assert!(
+            errors.iter().any(|m| m.contains("select-first の値が不正")),
+            "{:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn 設定の重複はエラー() {
+        let errors = error_messages("[extrun]\nmenu-position = window\nmenu-position = screen");
+        assert!(
+            errors.iter().any(|m| m.contains("設定が重複しています")),
+            "{:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn イコールのない設定行はエラー() {
+        let errors = error_messages("[extrun]\nmenu-position window");
+        assert!(
+            errors.iter().any(|m| m.contains("名前 = 値")),
+            "{:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn 設定セクションの中の_dir_はエラー() {
+        let errors = error_messages("[extrun]\nmenu-position = window\n :dir C:\\tmp");
+        assert!(
+            errors.iter().any(|m| m.contains(":dir を使えません")),
+            "{:?}",
+            errors
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // アクセスキー
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn アクセスキーを名前から取り出す() {
+        let config = parse_ok("[.txt]\n開く (&O) | C:\\a.exe");
+        let item = &config.apps[0];
+        // 目印の `&` は表示名から落ちる
+        assert_eq!(item.name, "開く (O)");
+        assert_eq!(item.accesskey_char(), Some('O'));
+    }
+
+    #[test]
+    fn 名前の先頭のアンパサンドもアクセスキーになる() {
+        let config = parse_ok("[.txt]\n&PNG に変換 | C:\\a.exe");
+        assert_eq!(config.apps[0].name, "PNG に変換");
+        assert_eq!(config.apps[0].accesskey, Some(0));
+        assert_eq!(config.apps[0].accesskey_char(), Some('P'));
+    }
+
+    #[test]
+    fn アクセスキーは大文字に正規化される() {
+        let config = parse_ok("[.txt]\n開く (&o) | C:\\a.exe");
+        assert_eq!(config.apps[0].name, "開く (o)");
+        assert_eq!(config.apps[0].accesskey_char(), Some('O'));
+    }
+
+    #[test]
+    fn エスケープしたアンパサンドはアクセスキーにならない() {
+        let config = parse_ok("[.txt]\nQ^&A のかたち | C:\\a.exe");
+        assert_eq!(config.apps[0].name, "Q&A のかたち");
+        assert_eq!(config.apps[0].accesskey, None);
+    }
+
+    /// `&` の直後が半角英数字でなければ、ただの `&` として残す
+    #[test]
+    fn アンパサンドの後ろが英数字でなければただの文字() {
+        let config = parse(("[.txt]\nA & B | C:\\a.exe").trim()).config;
+        assert_eq!(config.apps[0].name, "A & B");
+        assert_eq!(config.apps[0].accesskey, None);
+    }
+
+    #[test]
+    fn アクセスキーは最初のひとつだけ() {
+        let config = parse("[.txt]\n&A と &B | C:\\a.exe").config;
+        assert_eq!(config.apps[0].accesskey_char(), Some('A'));
+        // 2 つ目の `&` はただの文字として残る
+        assert_eq!(config.apps[0].name, "A と &B");
+    }
+
+    #[test]
+    fn セパレーターはアクセスキーを持たない() {
+        let config = parse_ok("[.txt]\n---");
+        assert!(config.apps[0].is_separator());
+        assert_eq!(config.apps[0].accesskey, None);
+    }
+
+    #[test]
+    fn 別名の中のアクセスキーも解決される() {
+        let config = parse_ok("@n = 開く (&O)\n[.txt]\n@n | C:\\a.exe");
+        assert_eq!(config.apps[0].name, "開く (O)");
+        assert_eq!(config.apps[0].accesskey_char(), Some('O'));
+    }
+
+    /// アクセスキーは名前欄だけの記法。引数の `&` はそのまま渡す
+    /// （PowerShell の呼び出し演算子で使う）
+    #[test]
+    fn 引数のアンパサンドはそのまま残る() {
+        let config = parse_ok("[.txt]\nA | C:\\a.exe | -Command \"& 'C:\\b.exe'\"");
+        assert_eq!(config.apps[0].args, vec!["-Command", "& 'C:\\b.exe'"]);
+    }
+
+    #[test]
+    fn アクセスキーの書き間違いを警告する() {
+        let warnings = warning_messages("[.txt]\nA & B | C:\\a.exe");
+        assert!(
+            warnings.iter().any(|m| m.contains("後ろは半角英数字")),
+            "{:?}",
+            warnings
+        );
+
+        let warnings = warning_messages("[.txt]\n&A と &B | C:\\a.exe");
+        assert!(
+            warnings.iter().any(|m| m.contains("& が複数あります")),
+            "{:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn 正しいアクセスキーは警告しない() {
+        for name in ["開く (&O)", "&PNG に変換", "Q^&A のかたち"] {
+            let warnings = warning_messages(&format!("[.txt]\n{} | C:\\a.exe", name));
+            assert!(warnings.is_empty(), "{}: {:?}", name, warnings);
+        }
     }
 
     #[test]

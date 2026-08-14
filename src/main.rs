@@ -11,9 +11,12 @@ mod console;
 mod menu;
 mod placeholder;
 
-use config::Config;
+use config::{Config, MenuPosition};
 use std::env;
 use std::path::PathBuf;
+use windows_sys::Win32::UI::HiDpi::{
+    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 
 /// 表示するエラー行数の上限（設定が壊れているときにダイアログが巨大化しないように）
 const MAX_DIALOG_ERRORS: usize = 20;
@@ -25,6 +28,15 @@ const USAGE: &str = "\
   extrun.exe --check             設定ファイルを検証する（エラーがあれば終了コード 1）
   extrun.exe --version           バージョンを表示する
   extrun.exe --help              このヘルプを表示する
+
+オプション（設定ファイルの [extrun] より優先されます）:
+  --at <位置>        メニューを表示する位置
+                       cursor  マウスカーソルの位置（既定）
+                       window  前面ウィンドウの中央
+                       screen  画面の中央
+                       X,Y     画面座標を直接指定
+  --select-first     先頭の項目を選択した状態で開く
+  --no-select-first  選択しない状態で開く
 
 設定ファイルは extrun.exe と同じフォルダの extrun-config.txt です。";
 
@@ -53,6 +65,70 @@ impl Target {
     }
 }
 
+/// コマンドラインで指定された、設定ファイルへの上書き
+///
+/// `None` は「指定なし」。`Some` のときだけ設定ファイルの値を置き換えるので、
+/// 設定で `select-first = yes` にしていても `--no-select-first` で打ち消せる。
+#[derive(Debug, Default, PartialEq)]
+struct Overrides {
+    menu_position: Option<MenuPosition>,
+    select_first: Option<bool>,
+}
+
+impl Overrides {
+    /// 設定ファイルの内容に重ねる
+    fn apply(&self, settings: &mut config::Settings) {
+        if let Some(position) = self.menu_position {
+            settings.menu_position = position;
+        }
+        if let Some(select_first) = self.select_first {
+            settings.select_first = select_first;
+        }
+    }
+}
+
+/// 引数からオプションを取り出し、残りをパスとして返す
+///
+/// 表示位置と初期選択は「設定ファイルの属性」ではなく「呼び出し方の属性」なので
+/// 引数でも指定できる。右クリック登録とホットキーで同じ設定ファイルを使いながら、
+/// 出す位置を変えられる。
+fn take_options(args: Vec<String>) -> Result<(Overrides, Vec<String>), String> {
+    let mut overrides = Overrides::default();
+    let mut paths = Vec::with_capacity(args.len());
+    let mut rest = args.into_iter();
+
+    while let Some(arg) = rest.next() {
+        // `--at 値` と `--at=値` の両方を受ける
+        let at = match arg.strip_prefix("--at") {
+            Some("") => Some(rest.next().ok_or_else(|| {
+                "--at には位置を指定してください（cursor / window / screen / X,Y）".to_string()
+            })?),
+            // `--attic` のような別の語を巻き込まないよう、`=` があるときだけ値と見なす
+            Some(value) => value.strip_prefix('=').map(|value| value.to_string()),
+            None => None,
+        };
+
+        if let Some(value) = at {
+            let position = config::parse_menu_position(&value).ok_or_else(|| {
+                format!(
+                    "--at の位置が不正です（cursor / window / screen / X,Y）:\n{}",
+                    value
+                )
+            })?;
+            overrides.menu_position = Some(position);
+            continue;
+        }
+
+        match arg.as_str() {
+            "--select-first" => overrides.select_first = Some(true),
+            "--no-select-first" => overrides.select_first = Some(false),
+            _ => paths.push(arg),
+        }
+    }
+
+    Ok((overrides, paths))
+}
+
 /// パスを絶対パスに変換（\\?\ プレフィックスなし）
 fn to_absolute_path(path: &PathBuf) -> PathBuf {
     if path.is_absolute() {
@@ -74,7 +150,30 @@ fn config_path() -> Option<PathBuf> {
     )
 }
 
+/// プロセスをモニタごとの DPI に対応させる
+///
+/// 宣言しないと Windows が 96 DPI で描いた結果を引き伸ばすので、高 DPI の画面では
+/// メニューの文字がぼやける。座標も仮想化され、`GetCursorPos` などが物理ピクセルを
+/// 返さなくなる。
+///
+/// V2 でないといけないのは、**メニューと非クライアント領域の自動スケーリングが
+/// V2 で追加された**ため。このアプリの UI はメニューがすべてなので V1 では効かない。
+/// ウィンドウを作る前に呼ぶ必要があるので `main()` の先頭に置く。
+///
+/// マニフェストで宣言するのが Microsoft の推奨だが、`build.rs` が `.rc` を
+/// `OUT_DIR` に生成する構成なのでマニフェストも生成物になり、手数が増える。
+/// API なら 1 行で済み、`windows-sys` のフィーチャーが 1 つ増えるだけで
+/// 依存クレートは増えない。Windows 10 1703 以降が必要だが、同梱サンプルが
+/// `tar.exe` を使っている時点で下限はすでに 1803 なので実質の制約にならない。
+fn enable_dpi_awareness() {
+    unsafe {
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
+
 fn main() {
+    enable_dpi_awareness();
+
     let Some(config_path) = config_path() else {
         show_error_dialog("エラー", "実行ファイルの場所を取得できません。");
         std::process::exit(1);
@@ -103,6 +202,15 @@ fn main() {
         ));
         return;
     }
+
+    // 設定ファイルへの上書きを取り出し、残りをパスとして扱う
+    let (overrides, args) = match take_options(args) {
+        Ok(result) => result,
+        Err(message) => {
+            show_error_dialog("ExtRun", &format!("{}\n\n{}", message, USAGE));
+            std::process::exit(1);
+        }
+    };
 
     if args.is_empty() {
         show_error_dialog(
@@ -138,7 +246,7 @@ fn main() {
     }
 
     // 設定ファイルの読み込み
-    let parsed = match Config::load(&config_path) {
+    let mut parsed = match Config::load(&config_path) {
         Ok(parsed) => parsed,
         Err(message) => {
             show_error_dialog("エラー", &message);
@@ -150,6 +258,9 @@ fn main() {
         show_error_dialog("設定ファイルのエラー", &format_errors(&parsed));
         std::process::exit(1);
     }
+
+    // 引数の指定は設定ファイルより優先する
+    overrides.apply(&mut parsed.config.settings);
 
     // メニューを作成して表示
     menu::create_and_show_menu(&parsed.config, &targets);
@@ -205,5 +316,84 @@ pub fn show_error_dialog(title: &str, message: &str) {
             title_wide.as_ptr(),
             MB_OK | MB_ICONWARNING,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn take(args: &[&str]) -> Result<(Overrides, Vec<String>), String> {
+        take_options(args.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn オプションを取り除いてパスだけ返す() {
+        let (overrides, paths) = take(&["--at", "window", "a.txt", "b.txt"]).unwrap();
+        assert_eq!(overrides.menu_position, Some(MenuPosition::Window));
+        assert_eq!(paths, vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn イコール付きのオプションも読める() {
+        let (overrides, paths) = take(&["--at=100,200", "a.txt"]).unwrap();
+        assert_eq!(
+            overrides.menu_position,
+            Some(MenuPosition::Point { x: 100, y: 200 })
+        );
+        assert_eq!(paths, vec!["a.txt"]);
+    }
+
+    #[test]
+    fn 初期選択の指定を読める() {
+        let (overrides, _) = take(&["--select-first", "a.txt"]).unwrap();
+        assert_eq!(overrides.select_first, Some(true));
+    }
+
+    /// 設定ファイルで yes にしていても打ち消せる必要がある
+    #[test]
+    fn 初期選択の打ち消しが効く() {
+        let (overrides, _) = take(&["--no-select-first", "a.txt"]).unwrap();
+        assert_eq!(overrides.select_first, Some(false));
+    }
+
+    #[test]
+    fn オプションを指定しなければ上書きしない() {
+        let (overrides, paths) = take(&["a.txt"]).unwrap();
+        assert_eq!(overrides, Overrides::default());
+        assert_eq!(overrides.menu_position, None);
+        assert_eq!(overrides.select_first, None);
+        assert_eq!(paths, vec!["a.txt"]);
+    }
+
+    #[test]
+    fn 値の無いオプションはエラー() {
+        let error = take(&["--at"]).unwrap_err();
+        assert!(error.contains("位置を指定してください"), "{}", error);
+    }
+
+    #[test]
+    fn 不正な位置はエラー() {
+        let error = take(&["--at", "middle", "a.txt"]).unwrap_err();
+        assert!(error.contains("位置が不正です"), "{}", error);
+    }
+
+    /// `--at` で始まる別の語をオプションと取り違えない
+    #[test]
+    fn 前方一致する別の語はパスとして扱う() {
+        let (overrides, paths) = take(&["--attic", "a.txt"]).unwrap();
+        assert_eq!(overrides.menu_position, None);
+        assert_eq!(paths, vec!["--attic", "a.txt"]);
+    }
+
+    #[test]
+    fn 上書きは設定ファイルに重なる() {
+        let mut settings = config::Settings::default();
+        let (overrides, _) = take(&["--at", "screen", "a.txt"]).unwrap();
+        overrides.apply(&mut settings);
+
+        assert_eq!(settings.menu_position, MenuPosition::Screen);
+        // 指定していない項目は設定ファイルの値のまま
+        assert!(!settings.select_first);
     }
 }

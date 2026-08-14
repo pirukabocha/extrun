@@ -15,6 +15,29 @@
 # =====================================================================
 
 
+# --- アプリ全体の設定 ------------------------------------------------
+# [extrun] は拡張子の見出しではなく、ExtRun 自体のふるまいの設定です。
+# ファイルのどこに書いても全体に効きます。
+#
+# ここの値はコマンドライン引数で上書きできます。
+#
+#   extrun.exe "%1"
+#   extrun.exe --at window --select-first "%1"
+
+[extrun]
+
+# メニューを表示する位置
+#   cursor  マウスカーソルの位置（既定）
+#   window  前面ウィンドウの中央
+#   screen  画面の中央
+#   X,Y     画面座標を直接指定（例 100,200）
+menu-position = cursor
+
+# 先頭の項目を選択した状態で開くか（yes / no）
+# yes にすると、開いてすぐ Enter で先頭の項目を実行できます。
+select-first = no
+
+
 # --- パスの別名 ------------------------------------------------------
 # 何度も出てくるフォルダやアプリはここにまとめておくと、
 # 引っ越しのときに 1 行直すだけで済みます。
@@ -48,9 +71,12 @@
 # 引数全体を "..." で囲み、中では '...' を使うのがコツです。
 [@画像]
 
-開く
-> 既定のアプリで開く  | @explorer | $p
-> プログラムから開く   | @rundll32 | shell32.dll,OpenAs_RunDLL $p
+# 名前の中の & は「次の 1 文字をアクセスキーにする」印です。
+# メニューが出ているあいだにその文字を押すと、その項目が実行されます。
+# キーはメニューごとに独立しているので、親と子で同じ文字を使えます。
+開く (&O)
+> 既定のアプリで開く (&D) | @explorer | $p
+> プログラムから開く (&P) | @rundll32 | shell32.dll,OpenAs_RunDLL $p
 
 # -NoExit を付けると実行後もウィンドウが残るので、結果を読めます。
 # $n（名前）は '...' で囲んで PowerShell の文字列にしています。
@@ -60,20 +86,20 @@
 
 # 名前の直後の [-...] は「継承した拡張子からの引き算」。
 # .png を対象から外すので、PNG のときだけ「PNG に変換」は出ません。
-形式を変換
-> PNG に変換 [-.png]
+形式を変換 (&C)
+> &PNG に変換 [-.png]
  | @powershell
  | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
-> JPEG に変換 [-.jpg -.jpeg]
+> &JPEG に変換 [-.jpg -.jpeg]
  | @powershell
  | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.jpg',[System.Drawing.Imaging.ImageFormat]::Jpeg); ^$i.Dispose()"
-> BMP に変換 [-.bmp]
+> &BMP に変換 [-.bmp]
  | @powershell
  | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.bmp',[System.Drawing.Imaging.ImageFormat]::Bmp); ^$i.Dispose()"
 > ---
 # [-] の付かない指定は「継承を無視して完全に置き換える」。
 # GIF のときだけ出ます。
-> 1 コマ目を PNG で取り出す [.gif]
+> 1 コマ目を PNG で取り出す (&F) [.gif]
  | @powershell
  | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p_frame1.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
 
@@ -89,8 +115,8 @@
 # セクション見出しには別名を並べて書けます。
 [@音声 @動画]
 
-既定のアプリで再生 | @explorer | $p
-プログラムから開く  | @rundll32 | shell32.dll,OpenAs_RunDLL $p
+既定のアプリで再生 (&Y) | @explorer | $p
+プログラムから開く | @rundll32 | shell32.dll,OpenAs_RunDLL $p
 
 # ^| は「引数の中の縦棒」。PowerShell のパイプをそのまま書けます。
 ファイル情報を表示
@@ -109,7 +135,7 @@
 # 例のように '@sys\tar.exe' と \ を挟むか、囲まずに書きます。
 [@書庫]
 
-同じ名前のフォルダに展開
+同じ名前のフォルダに展開 (&E)
  | @powershell
  | -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$-p' ^| Out-Null; & '@sys\tar.exe' -x -f '$p' -C '$-p'"
 
@@ -130,7 +156,7 @@ CAB を展開する [.cab]
 # =====================================================================
 [@テキスト]
 
-メモ帳で開く | @notepad
+メモ帳で開く (&N) | @notepad
 
 文字数・行数を数える
  | @powershell
@@ -149,7 +175,7 @@ CAB を展開する [.cab]
 # 先頭・末尾のセパレーターは表示するときに自動で取り除かれます。
 ---
 
-親フォルダを開いて選択 | @explorer | /select,$p
+親フォルダを開いて選択 (&S) | @explorer | /select,$p
 
 読み取り専用・隠し属性を解除
  | @attrib
@@ -169,15 +195,17 @@ SHA256 を書き出す
 # =====================================================================
 [folder]
 
-開く
-> エクスプローラで開く | @explorer | $p
+# キーはメニューごとに独立しているので、[@画像] の「開く (&O)」とは別に
+# フォルダ側でも好きな文字を選べます（ここでは D）。
+開く (&D)
+> エクスプローラで開く (&E) | @explorer | $p
 > ---
-> PowerShell で開く
+> PowerShell で開く (&P)
  | @powershell
  | -NoExit -Command "Set-Location -LiteralPath '$p'"
 # 引数欄を空（行末の | だけ）にすると引数なしで起動します。
 # :dir は作業フォルダの指定で、プレースホルダーも使えます。
-> コマンドプロンプトで開く | @cmd |
+> コマンドプロンプトで開く (&C) | @cmd |
  :dir $p
 
 ---
@@ -209,18 +237,18 @@ SHA256 を書き出す
 
 ---
 
-圧縮
-> ZIP
+圧縮 (&Z)
+> &ZIP
 # -C で親フォルダに移動して名前だけを渡すと、書庫の中がフラットになります。
->> 個別に圧縮 | @tar | -a -c -f $-p.zip -C $d $n
->> + まとめて 1 つに（フォルダ構成を保持） | @tar | -a -c -f $d\archive.zip $p
-> TAR.GZ
->> 個別に圧縮 | @tar | -a -c -f $-p.tar.gz -C $d $n
->> + まとめて 1 つに（フォルダ構成を保持） | @tar | -a -c -f $d\archive.tar.gz $p
+>> 個別に圧縮 (&S) | @tar | -a -c -f $-p.zip -C $d $n
+>> + まとめて 1 つに（フォルダ構成を保持） (&A) | @tar | -a -c -f $d\archive.zip $p
+> &TAR.GZ
+>> 個別に圧縮 (&S) | @tar | -a -c -f $-p.tar.gz -C $d $n
+>> + まとめて 1 つに（フォルダ構成を保持） (&A) | @tar | -a -c -f $d\archive.tar.gz $p
 
 ---
 
-パスをコピーする
+パスをコピーする (&P)
  | @powershell
  | -NoProfile -Command "Set-Clipboard -Value '$p'"
 
@@ -234,8 +262,24 @@ SHA256 を書き出す
 #   ^@       別名として解決しない @    例）^@('.png','.jpg')
 #   ^$       プレースホルダーにしない $
 #   ^-       拡張子欄で引き算にしない -
+#   ^&       アクセスキーにしない &    例）Q^&A のかたち | @notepad
 #   ^#  ^[  ^]  ^^   それぞれの文字そのもの
 #
 # ^ は特殊文字の前に置いたときだけエスケープとして働きます。
 # C:\Foo^Bar\app.exe のようなパスはそのまま書けます。
+#
+# =====================================================================
+# 覚え書き：アクセスキー
+#
+#   名前の中の & は、次の 1 文字（半角英数字）をアクセスキーにします。
+#   メニューが出ているあいだにその文字を押すと、その項目が実行されます。
+#
+#     開く (&O)      → 「開く (O)」と表示され、O キーで実行
+#     &PNG に変換    → 「PNG に変換」と表示され、P キーで実行
+#
+#   ・大文字小文字は区別されません
+#   ・キーはメニューごとに独立しています（親と子で同じ文字を使えます）
+#   ・同じメニューの中で重複すると、押しても実行されず選択が移るだけです
+#     （--check が重複を警告します）
+#   ・下線は Alt キーを押すと表示されます（Windows の設定によります）
 # =====================================================================

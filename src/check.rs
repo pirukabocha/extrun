@@ -79,6 +79,9 @@ fn report(config_path: &Path) -> Report {
 
 /// 項目ごとの問題を集める（セパレーターとサブメニューの親は除く）
 fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
+    // 重複だけは兄弟をまとめて見る必要があるので、潜る前にこの階層を調べる
+    warn_duplicate_accesskeys(items, diags);
+
     for item in items {
         if item.has_submenu() {
             collect_item_diags(&item.submenu, diags);
@@ -106,6 +109,36 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
         }
 
         warn_embedded_path_placeholder(item, diags);
+    }
+}
+
+/// 同じ階層でアクセスキーが重複していないか調べる
+///
+/// Win32 のニーモニックはポップアップごとにスコープされるので、比べるのは兄弟だけ。
+/// 親と子で同じ文字を使うのは問題ない。重複していると、キーを押しても実行されず
+/// 候補が順に選択されるだけになるので、押しても動かないように見える。
+///
+/// 拡張子が違う項目どうしでも警告する。セクションが違ってもルートの項目は同じ階層に
+/// 並ぶし、複数選択したときのメニューはそれぞれの和集合になるので、実際に同居しうる。
+fn warn_duplicate_accesskeys(items: &[MenuItem], diags: &mut Vec<Diag>) {
+    // 項目数はたかが知れているので線形探索で足りる
+    let mut seen: Vec<(char, u32, &str)> = Vec::new();
+
+    for item in items {
+        let Some(key) = item.accesskey_char() else {
+            continue;
+        };
+
+        match seen.iter().find(|(c, _, _)| *c == key) {
+            Some((_, first_line, first_name)) => diags.push(Diag::warning(
+                item.line,
+                format!(
+                    "アクセスキー {} が {}行目の「{}」と重複しています: {}",
+                    key, first_line, first_name, item.name
+                ),
+            )),
+            None => seen.push((key, item.line, &item.name)),
+        }
     }
 }
 
@@ -215,5 +248,60 @@ mod tests {
     fn 個別実行なら_p_が引数の一部でも警告しない() {
         let diags = diags_of("[.txt]\nA | notepad.exe | -i$p");
         assert!(diags.is_empty(), "{:?}", diags);
+    }
+
+    // -----------------------------------------------------------------
+    // アクセスキー
+    // -----------------------------------------------------------------
+
+    fn 重複の警告(text: &str) -> Vec<String> {
+        diags_of(text)
+            .iter()
+            .filter(|d| d.message.contains("重複しています"))
+            .map(|d| d.message.clone())
+            .collect()
+    }
+
+    #[test]
+    fn 同じ階層のアクセスキーの重複を警告する() {
+        let warnings = 重複の警告("[.txt]\n&Alpha | notepad.exe\n&Apple | notepad.exe");
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+        assert!(warnings[0].contains("アクセスキー A"), "{:?}", warnings);
+    }
+
+    #[test]
+    fn アクセスキーの重複は大文字小文字を区別しない() {
+        // Win32 のニーモニックは大小を区別しない
+        let warnings = 重複の警告("[.txt]\n&Alpha | notepad.exe\n&apple | notepad.exe");
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+    }
+
+    /// キーはメニューごとにスコープされるので、親と子で同じ文字を使える
+    #[test]
+    fn 階層が違えばアクセスキーは重複しない() {
+        let warnings = 重複の警告("[.txt]\n&Zip\n> &Zip 個別 | notepad.exe");
+        assert!(warnings.is_empty(), "{:?}", warnings);
+    }
+
+    /// セクションが違ってもルートの項目は同じメニューに並ぶ
+    /// （複数選択したときのメニューはそれぞれの和集合になる）
+    #[test]
+    fn セクションが違ってもルートなら重複を警告する() {
+        let warnings =
+            重複の警告("[.txt]\n&Alpha | notepad.exe\n[folder]\n&Apple | notepad.exe");
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+    }
+
+    /// サブメニューの親は実行されないが、キーは押されるので判定に入る
+    #[test]
+    fn サブメニューの親も重複判定に入る() {
+        let warnings = 重複の警告("[.txt]\n&Zip\n> 子 | notepad.exe\n&Zoom | notepad.exe");
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+    }
+
+    #[test]
+    fn アクセスキーのない項目は重複しない() {
+        let warnings = 重複の警告("[.txt]\nA | notepad.exe\nB | notepad.exe");
+        assert!(warnings.is_empty(), "{:?}", warnings);
     }
 }

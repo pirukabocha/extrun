@@ -6,10 +6,8 @@
 解決すると `^$` が `$` になったあとプレースホルダーとして拾われてしまう。
 */
 
+use crate::config::SPECIALS;
 use std::path::Path;
-
-/// エスケープ（`^`）の対象になる特殊文字
-const SPECIALS: &[u8] = b"^@$|:>+-#[]";
 
 /// パスのプレースホルダー置換情報
 pub struct PathPlaceholders {
@@ -177,6 +175,15 @@ mod tests {
         assert_eq!(ph.replace("^@filelist.txt"), "@filelist.txt");
         assert_eq!(ph.replace("^|"), "|");
         assert_eq!(ph.replace("^^"), "^");
+        assert_eq!(ph.replace("^&"), "&");
+    }
+
+    /// 素の `&` は PowerShell の呼び出し演算子なので、そのまま渡す
+    /// （アクセスキーの記法が効くのは項目名だけ）
+    #[test]
+    fn 素のアンパサンドはそのまま渡る() {
+        let ph = placeholders();
+        assert_eq!(ph.replace("& 'C:\\a.exe'"), "& 'C:\\a.exe'");
     }
 
     #[test]

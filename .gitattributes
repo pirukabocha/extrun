@@ -8,7 +8,15 @@
 *.ps1   text eol=crlf
 *.bat   text eol=crlf
 *.cmd   text eol=crlf
-*.reg   text eol=crlf
+
+# .reg は regedit が BOM で文字コードを判定し、BOM が無ければ ANSI と
+# 見なす。UTF-8 のまま取り出されると、メニュー名の日本語が文字化けする。
+# working-tree-encoding を指定すると、リポジトリには UTF-8 で格納しつつ
+# （＝差分も blame も GitHub 上の表示も読める）、作業ツリーには UTF-16 LE
+# ＋ BOM で書き出される。clone した人がそのファイルをそのまま使える。
+# 作業ツリー側を UTF-8 で保存してしまうと、git add が
+# 「failed to encode」で止まるので取り違えに気づける。
+*.reg   text eol=crlf working-tree-encoding=UTF-16LE-BOM
 
 # バイナリ（改行変換をさせない）
 *.png   binary

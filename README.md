@@ -12,6 +12,8 @@
 - **🎯 拡張子ベースフィルタリング**: ファイルの種類に応じて適切なアプリだけを表示
 - **📁 複数ファイル対応**: 一度に複数のファイル/フォルダを処理可能
 - **🔧 柔軟な設定**: 1行1項目のシンプルな設定ファイル
+- **⌨️ アクセスキー**: 項目名に `&` を書けばキーひとつで実行
+- **🖱️ 表示位置を選べる**: カーソル位置・ウィンドウ中央・画面中央・座標指定。引数でも切り替え可能
 - **💾 省メモリ**: 実行時の依存クレートは `windows-sys` のみ
 
 ## インストール
@@ -77,7 +79,12 @@ extrun.exe --help
 
 これで、右クリック →「送る」→ ExtRun で選択中のファイルを実行できます。
 
-レジストリを編集し、右クリックメニューに項目として追加する方法もあります。以下の内容を `.reg` ファイルとして保存し、`extrun.exe` のパスを実際の置き場所に書き換えてから実行してください。
+レジストリを編集し、右クリックメニューに項目として追加する方法もあります。**配布 zip には、この内容を書き込み済みの `registry\extrun-add.reg` / `registry\extrun-remove.reg` が入っています**ので、そちらを使えばパスを書き換えるだけで済みます。
+
+自分で作る場合は以下の内容を `.reg` ファイルとして保存し、`extrun.exe` のパスを実際の置き場所に書き換えてから実行してください。
+
+> [!IMPORTANT]
+> **`.reg` は UTF-16 LE（BOM あり）で保存してください。** regedit は BOM で文字コードを判定し、BOM が無いファイルは ANSI として読みます。メモ帳の既定は UTF-8 なので、そのまま保存するとメニュー名の日本語が文字化けするか、インポートに失敗します。メモ帳なら「名前を付けて保存」で文字コードに `UTF-16 LE` を選んでください。
 
 ```registry
 Windows Registry Editor Version 5.00
@@ -190,6 +197,38 @@ JPEG に変換 [-.jpg -.jpeg] | ...   # 継承したものから .jpg / .jpeg �
 
 すべてのパスが展開されるのは、`$p` を**独立した 1 つの引数**として書いたときだけです。`-i$p` のように他の文字とつなげて書くと最初の 1 つしか渡りません（`--check` が警告します）。引数に `$p` が無い場合は末尾にすべてのパスが追加されます。
 
+### アクセスキー
+
+名前の中の `&` は、次の 1 文字をアクセスキーにします。メニューが出ているあいだにそのキーを押すと、その項目が実行されます。
+
+```text
+開く (&O)          「開く (O)」と表示され、O キーで実行
+&PNG に変換        「PNG に変換」と表示され、P キーで実行
+```
+
+キーはメニューごとに独立しているので、親と子で同じ文字を使えます（`圧縮 (&Z)` → `&ZIP` → `個別に圧縮 (&S)` なら `Z` `Z` `S` の 3 打鍵）。同じメニューの中で重複すると押しても実行されないので、`--check` が警告します。表示したい `&` は `^&` と書きます。
+
+下線が見えないときは Alt キーを押してください。詳細は [extrun-config-format.md](extrun-config-format.md#アクセスキー) を参照してください。
+
+### グローバル設定
+
+`[extrun]` は拡張子の見出しではなく、ExtRun 自体のふるまいを書く場所です。ファイルのどこに書いても全体に効きます。
+
+```text
+[extrun]
+menu-position = cursor   # cursor / window / screen / X,Y
+select-first  = no       # yes にすると先頭の項目を選択した状態で開く
+```
+
+**表示位置と初期選択は、コマンドライン引数で上書きできます。** 右クリックから呼ぶときはカーソル位置が正しいのですが、ホットキーから呼ぶときはマウスがどこにあるか分かりません。設定ファイルは 1 つのまま、呼び出しごとに変えられます。
+
+```text
+extrun.exe "%1"                              右クリック登録（設定ファイルのまま）
+extrun.exe --at window --select-first "%1"   ホットキーから
+```
+
+`--at` は `cursor` / `window`（前面ウィンドウの中央）/ `screen`（画面の中央）/ `X,Y`（座標指定）を受け付けます。`--no-select-first` で設定の `yes` を打ち消せます。
+
 ### 別名・継続行・作業フォルダ
 
 ```text
@@ -284,7 +323,7 @@ if errorlevel 1 exit /b 1
 配布している `extrun.exe` はコード署名をしていないため、「Windows によって PC が保護されました」という警告が出ることがあります。続行する場合は「詳細情報」→「実行」を選んでください。ダウンロードした zip が壊れていないかは、同梱の `.sha256` と照合して確認できます。
 
 ```powershell
-Get-FileHash .\extrun-1.0.0-win-x64.zip -Algorithm SHA256
+Get-FileHash .\extrun-<version>-win-x64.zip -Algorithm SHA256
 ```
 
 同じ理由で、ウイルス対策ソフトが未署名の実行ファイルを警告することがあります。気になる場合はソースからビルドしてください（`cargo build --release`）。
@@ -332,20 +371,24 @@ cargo fmt --check
 
 テスト → リリースビルド → 配布物の組み立て → zip → SHA256 を通しで実行し、`dist\` に出力します。バージョンは `Cargo.toml` から読みます。上げるときに手で直すのは `Cargo.toml` と `packaging\readme.txt` の見出し、`CHANGELOG.md` の 3 か所で、ずれているとビルドスクリプトが止まります。
 
-`v1.0.0` のようなタグを push すると、[.github/workflows/release.yml](.github/workflows/release.yml) が同じスクリプトを実行して、zip と `.sha256` を GitHub Releases に添付します。
+`v1.2.3` のようなタグを push すると、[.github/workflows/release.yml](.github/workflows/release.yml) が同じスクリプトを実行して、zip と `.sha256` を GitHub Releases に添付します。
 
 ```text
 dist/
-├── extrun-1.0.0-win-x64.zip
-└── extrun-1.0.0-win-x64.zip.sha256
+├── extrun-<version>-win-x64.zip
+└── extrun-<version>-win-x64.zip.sha256
 
 zip の中身:
-extrun-1.0.0/
+extrun-<version>/
 ├── extrun.exe
 ├── readme.txt                 # packaging/readme.txt。配布専用でこの README とは別物
 ├── extrun-config.sample.txt   # extrun-config.txt をリネームしたもの
 ├── extrun-config-format.md
 ├── extrun-recipes.md
+├── CHANGELOG.md
+├── registry/                  # 右クリックメニュー登録用（UTF-16 LE に変換して同梱）
+│   ├── extrun-add.reg
+│   └── extrun-remove.reg
 └── LICENSE
 ```
 
