@@ -1272,6 +1272,18 @@ fn parse_extensions(
     for ext in added {
         push_unique(&mut result, ext);
     }
+
+    // 空の `extensions` は「すべて対象」の意味になる（menu.rs）。引き切ると
+    // 「その拡張子を外す」つもりが「すべての対象で出る」という正反対の結果に
+    // なり、しかも黙って起きるので警告する
+    if result.is_empty() && !inherited.is_empty() {
+        diags.push(Diag::warning(
+            line,
+            "引き算で対象の拡張子が空になりました（空はすべての対象という意味になります）"
+                .to_string(),
+        ));
+    }
+
     result
 }
 
@@ -1988,6 +2000,31 @@ mod tests {
     fn 拡張子を引き算できる() {
         let config = parse_ok("[.jpg .png .svg]\n変換 [-.jpg -.svg] | C:\\a.exe");
         assert_eq!(config.apps[0].extensions, vec![".png"]);
+    }
+
+    #[test]
+    fn 引き切って空になると警告() {
+        let warnings = warning_messages("[.txt]\nX [-.txt] | C:\\a.exe");
+        assert!(warnings.iter().any(|m| m.contains("空になりました")));
+    }
+
+    #[test]
+    fn 引き算で残りがあれば警告しない() {
+        let warnings = warning_messages("[.txt .md]\nX [-.txt] | C:\\a.exe");
+        assert!(!warnings.iter().any(|m| m.contains("空になりました")));
+    }
+
+    #[test]
+    fn 引き切っても足し直せば警告しない() {
+        let warnings = warning_messages("[.txt]\nX [-.txt +.md] | C:\\a.exe");
+        assert!(!warnings.iter().any(|m| m.contains("空になりました")));
+    }
+
+    #[test]
+    fn 継承がもともと空なら警告しない() {
+        // `[]` は「すべて対象」。引き算で空になったわけではない
+        let warnings = warning_messages("[]\nX | C:\\a.exe");
+        assert!(!warnings.iter().any(|m| m.contains("空になりました")));
     }
 
     #[test]
