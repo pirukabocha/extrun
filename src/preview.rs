@@ -12,6 +12,7 @@
 use crate::config::{Config, MenuItem};
 use crate::console;
 use crate::menu::{filter_menu_items, resolve_invocations};
+use crate::placeholder::RunContext;
 use crate::Target;
 use std::path::Path;
 
@@ -38,12 +39,14 @@ pub fn run(config_path: &Path, targets: &[Target]) -> i32 {
         return 1;
     }
 
-    console::print(&report(&parsed.config, targets));
+    // 実行するときと同じように、ここで 1 回だけ確定させる。表示される日時は
+    // プレビューを実行した時刻になる
+    console::print(&report(&parsed.config, targets, &RunContext::capture()));
     0
 }
 
 /// 出力する本文を組み立てる
-fn report(config: &Config, targets: &[Target]) -> String {
+fn report(config: &Config, targets: &[Target], ctx: &RunContext) -> String {
     let mut out = String::from("対象:\r\n");
     for target in targets {
         out.push_str(&format!(
@@ -60,7 +63,7 @@ fn report(config: &Config, targets: &[Target]) -> String {
     }
 
     let mut count = 0;
-    write_items(&items, &mut Vec::new(), targets, &mut out, &mut count);
+    write_items(&items, &mut Vec::new(), targets, ctx, &mut out, &mut count);
     out.push_str(&format!("\r\n{} 項目\r\n", count));
     out
 }
@@ -73,6 +76,7 @@ fn write_items(
     items: &[MenuItem],
     parents: &mut Vec<String>,
     targets: &[Target],
+    ctx: &RunContext,
     out: &mut String,
     count: &mut usize,
 ) {
@@ -83,7 +87,7 @@ fn write_items(
 
         if item.has_submenu() {
             parents.push(item.name.clone());
-            write_items(&item.submenu, parents, targets, out, count);
+            write_items(&item.submenu, parents, targets, ctx, out, count);
             parents.pop();
             continue;
         }
@@ -97,7 +101,7 @@ fn write_items(
         out.push_str(&item.name);
         out.push_str("\r\n");
 
-        write_invocations(item, targets, out);
+        write_invocations(item, targets, ctx, out);
     }
 }
 
@@ -114,7 +118,7 @@ const LABEL_DIR: &str = "作業フォルダ";
 ///
 /// 引数は 1 つ 1 行にする。空白で連結すると、PowerShell に渡す長い 1 引数と
 /// 複数の引数の区別がつかなくなる（引数の切れ目こそ確かめたいもの）。
-fn write_invocations(item: &MenuItem, targets: &[Target], out: &mut String) {
+fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out: &mut String) {
     if item.path.is_empty() {
         out.push_str("  （実行するパスがありません）\r\n");
         return;
@@ -128,7 +132,7 @@ fn write_invocations(item: &MenuItem, targets: &[Target], out: &mut String) {
         ""
     };
 
-    let invocations = resolve_invocations(item, targets);
+    let invocations = resolve_invocations(item, targets, ctx);
     let total = invocations.len();
 
     for (index, invocation) in invocations.iter().enumerate() {
@@ -181,10 +185,31 @@ mod tests {
         }
     }
 
+    /// 時刻を固定した実行時コンテキスト（2026-08-15 土曜 14:03:05）
+    fn ctx() -> RunContext {
+        RunContext {
+            now: crate::datetime::test_time(),
+        }
+    }
+
+    /// 日時も解決済みで出る（書式を確かめるのはプレビューの主な用途のひとつ）
+    #[test]
+    fn 日時を解決して出す() {
+        let config =
+            config_of("[.txt]\nバックアップ | C:\\Windows\\notepad.exe | $-p_$t{yyyyMMdd}.bak");
+        let text = report(&config, &[target("a.txt")], &ctx());
+
+        assert!(
+            text.contains("引数　　　　  C:\\dir\\a_20260815.bak"),
+            "{}",
+            text
+        );
+    }
+
     #[test]
     fn 項目と解決済みのコマンドラインを出す() {
         let config = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe | -x $-p.bak");
-        let text = report(&config, &[target("a.txt")]);
+        let text = report(&config, &[target("a.txt")], &ctx());
 
         assert!(text.contains("C:\\dir\\a.txt  (.txt)"), "{}", text);
         assert!(text.contains("開く"), "{}", text);
@@ -205,7 +230,7 @@ mod tests {
         let config = config_of(
             "[.txt]\n既定 | C:\\Windows\\notepad.exe\n指定 | C:\\Windows\\notepad.exe\n :dir C:\\work",
         );
-        let text = report(&config, &[target("a.txt")]);
+        let text = report(&config, &[target("a.txt")], &ctx());
 
         assert!(
             text.contains("作業フォルダ  C:\\Windows  （:dir 未指定のため実行ファイルの場所）"),
@@ -218,7 +243,7 @@ mod tests {
     #[test]
     fn サブメニューは親の名前をつなげる() {
         let config = config_of("[.txt]\n変換\n> PNG に変換 | C:\\Windows\\notepad.exe");
-        let text = report(&config, &[target("a.txt")]);
+        let text = report(&config, &[target("a.txt")], &ctx());
 
         assert!(text.contains("変換 > PNG に変換"), "{}", text);
         // 親自身は実行されないので数えない
@@ -231,7 +256,7 @@ mod tests {
         let config = config_of(
             "[.txt]\n個別 | C:\\Windows\\notepad.exe\n+ まとめて | C:\\Windows\\notepad.exe",
         );
-        let text = report(&config, &[target("a.txt"), target("b.txt")]);
+        let text = report(&config, &[target("a.txt"), target("b.txt")], &ctx());
 
         assert!(text.contains("[1/2]"), "{}", text);
         assert!(text.contains("[2/2]"), "{}", text);
@@ -246,7 +271,7 @@ mod tests {
     fn セパレーターは出さない() {
         let config =
             config_of("[.txt]\nA | C:\\Windows\\notepad.exe\n---\nB | C:\\Windows\\notepad.exe");
-        let text = report(&config, &[target("a.txt")]);
+        let text = report(&config, &[target("a.txt")], &ctx());
 
         assert!(!text.contains("---"), "{}", text);
         assert!(text.contains("2 項目"), "{}", text);
@@ -255,7 +280,7 @@ mod tests {
     #[test]
     fn 引数を空にした項目は引数なしと出る() {
         let config = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe |");
-        let text = report(&config, &[target("a.txt")]);
+        let text = report(&config, &[target("a.txt")], &ctx());
 
         assert!(text.contains("引数　　　　  （なし）"), "{}", text);
     }
@@ -263,7 +288,7 @@ mod tests {
     #[test]
     fn 適用できる項目がなければその旨を出す() {
         let config = config_of("[.png]\nA | C:\\Windows\\notepad.exe");
-        let text = report(&config, &[target("a.txt")]);
+        let text = report(&config, &[target("a.txt")], &ctx());
 
         assert!(
             text.contains("適用できるメニュー項目がありません"),

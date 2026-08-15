@@ -3,7 +3,7 @@
 */
 
 use crate::config::{Config, MenuItem, MenuPosition};
-use crate::placeholder::PathPlaceholders;
+use crate::placeholder::{PathPlaceholders, RunContext};
 use crate::Target;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -519,17 +519,24 @@ pub struct Invocation {
 /// 項目と対象から、起動されるプロセスを組み立てる
 ///
 /// `+`（まとめて渡す）なら 1 つ、そうでなければ `targets` と同じ順・同じ個数を返す。
-pub fn resolve_invocations(item: &MenuItem, targets: &[Target]) -> Vec<Invocation> {
+///
+/// `ctx` は呼び出し側で 1 回だけ作って渡す。ここで作ると対象ごとに時刻を取り直す
+/// ことになり、複数選択して個別に起動したときに `$t{ss}` がずれる。
+pub fn resolve_invocations(
+    item: &MenuItem,
+    targets: &[Target],
+    ctx: &RunContext,
+) -> Vec<Invocation> {
     if targets.is_empty() {
         return Vec::new();
     }
 
     let exe_path = PathBuf::from(&item.path);
-    let working_dir = resolve_working_dir(item, &exe_path, targets);
+    let working_dir = resolve_working_dir(item, &exe_path, targets, ctx);
 
     if item.all_mode {
         return vec![Invocation {
-            args: all_mode_args(&item.args, targets),
+            args: all_mode_args(&item.args, targets, ctx),
             program: exe_path,
             working_dir,
         }];
@@ -539,7 +546,7 @@ pub fn resolve_invocations(item: &MenuItem, targets: &[Target]) -> Vec<Invocatio
         .iter()
         .map(|target| Invocation {
             program: exe_path.clone(),
-            args: PathPlaceholders::from_path(&target.path).replace_args(&item.args),
+            args: PathPlaceholders::from_path(&target.path).replace_args(&item.args, ctx),
             working_dir: working_dir.clone(),
         })
         .collect()
@@ -548,7 +555,12 @@ pub fn resolve_invocations(item: &MenuItem, targets: &[Target]) -> Vec<Invocatio
 /// 作業フォルダを解決する
 ///
 /// プレースホルダーは最初の対象を基準にする。未指定なら実行ファイルの親ディレクトリ。
-fn resolve_working_dir(item: &MenuItem, exe_path: &Path, targets: &[Target]) -> String {
+fn resolve_working_dir(
+    item: &MenuItem,
+    exe_path: &Path,
+    targets: &[Target],
+    ctx: &RunContext,
+) -> String {
     if item.working_dir.is_empty() {
         return exe_path
             .parent()
@@ -556,13 +568,13 @@ fn resolve_working_dir(item: &MenuItem, exe_path: &Path, targets: &[Target]) -> 
             .unwrap_or_else(|| ".".to_string());
     }
 
-    PathPlaceholders::from_path(&targets[0].path).replace(&item.working_dir)
+    PathPlaceholders::from_path(&targets[0].path).replace(&item.working_dir, ctx)
 }
 
 /// `+`（まとめて渡す）の引数を組み立てる
 ///
 /// 引数がちょうど `$p` のところに全パスを展開する。`$p` がどこにも無ければ末尾に足す。
-fn all_mode_args(base_args: &[String], targets: &[Target]) -> Vec<String> {
+fn all_mode_args(base_args: &[String], targets: &[Target], ctx: &RunContext) -> Vec<String> {
     let placeholder_count = base_args.iter().filter(|arg| arg.as_str() == "$p").count();
     let has_path_placeholder = base_args.iter().any(|arg| arg.contains("$p"));
     let extra_path_args = if has_path_placeholder {
@@ -579,7 +591,7 @@ fn all_mode_args(base_args: &[String], targets: &[Target]) -> Vec<String> {
                 final_args.push(target.path.to_string_lossy().to_string());
             }
         } else {
-            final_args.push(placeholders.replace(arg));
+            final_args.push(placeholders.replace(arg, ctx));
         }
     }
 
@@ -607,9 +619,13 @@ fn execute_command(item: &MenuItem, targets: &[Target]) {
         return;
     }
 
+    // 日時はここで 1 回だけ確定させる。対象ごとに取り直すと、個別に起動した
+    // ときに $t{ss} がずれて、まとめて作ったはずのファイル名が揃わなくなる
+    let ctx = RunContext::capture();
+
     // 個別実行では対象の数だけ同じ失敗が並ぶので、集めてから 1 枚だけ出す
     let mut reasons: Vec<String> = Vec::new();
-    for invocation in resolve_invocations(item, targets) {
+    for invocation in resolve_invocations(item, targets, &ctx) {
         if let Err(reason) = spawn_command(
             &invocation.program,
             &invocation.args,
@@ -734,27 +750,27 @@ mod tests {
         // extrun-config.txt から構築されるメニューの項目数
         // （セパレーターとサブメニューの中身も数える）
         let expected = [
-            (".png", 24),
-            (".jpg", 24),
-            (".gif", 27),
-            (".ico", 24),
-            (".bmp", 24),
-            (".tif", 25),
-            (".mp3", 19),
-            (".wav", 19),
-            (".mp4", 19),
-            (".mkv", 19),
-            (".zip", 19),
-            (".tar", 19),
-            (".gz", 19),
-            (".cab", 17),
-            (".txt", 19),
-            (".md", 19),
-            (".csv", 19),
+            (".png", 25),
+            (".jpg", 25),
+            (".gif", 28),
+            (".ico", 25),
+            (".bmp", 25),
+            (".tif", 26),
+            (".mp3", 20),
+            (".wav", 20),
+            (".mp4", 20),
+            (".mkv", 20),
+            (".zip", 20),
+            (".tar", 20),
+            (".gz", 20),
+            (".cab", 18),
+            (".txt", 20),
+            (".md", 20),
+            (".csv", 20),
             // どのセクションにも該当しない拡張子は [file] と [file folder] だけ
-            (".pdf", 15),
-            ("file", 15),
-            ("folder", 20),
+            (".pdf", 16),
+            ("file", 16),
+            ("folder", 21),
         ];
 
         let config = sample_config();

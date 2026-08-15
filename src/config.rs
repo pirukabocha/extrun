@@ -942,6 +942,14 @@ fn build_item(
         None => String::new(),
     };
 
+    // 日時の書式はここで検証する。書き間違えると誤った文字列が黙って
+    // ファイル名に入るので、警告ではなくエラーにしてメニューを止める
+    for text in args.iter().chain(std::iter::once(&working_dir)) {
+        if let Some(message) = crate::datetime::validate(text) {
+            diags.push(Diag::error(line, message));
+        }
+    }
+
     MenuItem {
         name,
         // セパレーターは選べないのでアクセスキーを持たない
@@ -1106,6 +1114,56 @@ fn parse_extensions(
 }
 
 /// 引数を空白区切りで分解する（引用符で空白を含められる）
+#[cfg(test)]
+mod datetime_tests {
+    use super::*;
+
+    fn errors(text: &str) -> Vec<String> {
+        parse(text)
+            .errors()
+            .map(|diag| diag.message.clone())
+            .collect()
+    }
+
+    #[test]
+    fn 日時の書式は引数の中でも検証される() {
+        let messages = errors("[.txt]\nA | C:\\Windows\\notepad.exe | $-p_$t{yyyyMMdd_backup}.zip");
+        assert_eq!(messages.len(), 1, "{:?}", messages);
+        assert!(messages[0].contains("書式ではない英字"), "{:?}", messages);
+    }
+
+    #[test]
+    fn 日時の書式は作業フォルダでも検証される() {
+        let messages =
+            errors("[.txt]\nA | C:\\Windows\\notepad.exe\n :dir C:\\out\\$t{yyyy/MM/dz}");
+        assert_eq!(messages.len(), 1, "{:?}", messages);
+        assert!(messages[0].contains("書式ではない英字"), "{:?}", messages);
+    }
+
+    /// 書式の間違いは黙って誤ったファイル名を作るので、警告ではなくエラーにする
+    #[test]
+    fn 日時の書式の間違いはメニューを止める() {
+        let parsed = parse("[.txt]\nA | C:\\Windows\\notepad.exe | $t{");
+        assert!(parsed.has_error());
+    }
+
+    #[test]
+    fn 正しい日時の書式は通る() {
+        for args in [
+            "$-p_$t{yyyyMMdd}.zip",
+            "$t{yyyy年MM月dd日(ddd)}",
+            "-o $t{yyyy-MM-dd_HHmmss} $p",
+            // エスケープしたものは書式ではない
+            "^$t{これは書式ではない}",
+            // 中括弧を伴わない $t は今までどおり素通りする
+            "$t",
+        ] {
+            let text = format!("[.txt]\nA | C:\\Windows\\notepad.exe | {}", args);
+            assert!(errors(&text).is_empty(), "{}", args);
+        }
+    }
+}
+
 fn split_args(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut args = Vec::new();

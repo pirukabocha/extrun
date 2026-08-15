@@ -8,6 +8,7 @@ ExtRun - ファイルやフォルダを素早く適切なアプリケーショ�
 mod check;
 mod config;
 mod console;
+mod datetime;
 mod menu;
 mod placeholder;
 mod preview;

@@ -242,6 +242,10 @@ SHA256 を書き出す
 # -C で親フォルダに移動して名前だけを渡すと、書庫の中がフラットになります。
 >> 個別に圧縮 (&S) | @tar | -a -c -f $-p.zip -C $d $n
 >> + まとめて 1 つに（フォルダ構成を保持） (&A) | @tar | -a -c -f $d\archive.zip $p
+# $t{...} は実行した日時。書式は yyyy=年 MM=月 dd=日 HH=時 mm=分 ss=秒 で、
+# ddd と書くと曜日（土）、EEE で英語の曜日（Sat）になります。
+# 上書きを避けたいときや、同じ操作を日をまたいで繰り返すときに使えます。
+>> 日付をつけて圧縮 (&D) | @tar | -a -c -f $-p_$t{yyyyMMdd-HHmmss}.zip -C $d $n
 > &TAR.GZ
 >> 個別に圧縮 (&S) | @tar | -a -c -f $-p.tar.gz -C $d $n
 >> + まとめて 1 つに（フォルダ構成を保持） (&A) | @tar | -a -c -f $d\archive.tar.gz $p

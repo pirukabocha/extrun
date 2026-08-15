@@ -7,7 +7,28 @@
 */
 
 use crate::config::SPECIALS;
+use crate::datetime::LocalTime;
 use std::path::Path;
+
+/// 対象のパスから導けない、実行時に決まる値
+///
+/// パス由来の値（`PathPlaceholders`）が対象ごとに作り直されるのに対して、
+/// こちらは**対象をまたいで共有する**。日時は起動の直前に 1 回だけ確定させる。
+/// 対象ごとに取り直すと、複数選択して個別に起動したときに `$t{ss}` がずれて、
+/// まとめて作ったはずのファイル名が揃わなくなる。
+pub struct RunContext {
+    /// `$t{...}` が使う時刻
+    pub now: LocalTime,
+}
+
+impl RunContext {
+    /// 実行時の値をここで確定させる
+    pub fn capture() -> Self {
+        RunContext {
+            now: LocalTime::now(),
+        }
+    }
+}
 
 /// パスのプレースホルダー置換情報
 pub struct PathPlaceholders {
@@ -94,7 +115,7 @@ impl PathPlaceholders {
     }
 
     /// 文字列内のエスケープとプレースホルダーを置換
-    pub fn replace(&self, text: &str) -> String {
+    pub fn replace(&self, text: &str, ctx: &RunContext) -> String {
         let bytes = text.as_bytes();
         let mut out = String::with_capacity(text.len() + self.p.len());
         let mut chunk = 0;
@@ -108,6 +129,21 @@ impl PathPlaceholders {
                     out.push(bytes[i + 1] as char);
                     i += 2;
                     chunk = i;
+                }
+                // `$t{...}` は書式文字列を伴うので、1 文字の記号より先に見る。
+                // 閉じていない場合はプレースホルダーとして扱わずそのまま残す
+                // （パース時にエラーにしているので、通常はここに来ない）
+                b'$' if bytes[i + 1..].starts_with(b"t{") => {
+                    match bytes[i + 3..].iter().position(|b| *b == b'}') {
+                        Some(end) => {
+                            let spec = &text[i + 3..i + 3 + end];
+                            out.push_str(&text[chunk..i]);
+                            out.push_str(&ctx.now.format(spec));
+                            i = i + 3 + end + 1;
+                            chunk = i;
+                        }
+                        None => i += 1,
+                    }
                 }
                 b'$' => match self.lookup(&bytes[i + 1..]) {
                     Some((value, len)) => {
@@ -127,8 +163,8 @@ impl PathPlaceholders {
     }
 
     /// 引数リスト内のプレースホルダーを置換
-    pub fn replace_args(&self, args: &[String]) -> Vec<String> {
-        args.iter().map(|arg| self.replace(arg)).collect()
+    pub fn replace_args(&self, args: &[String], ctx: &RunContext) -> Vec<String> {
+        args.iter().map(|arg| self.replace(arg, ctx)).collect()
     }
 }
 
@@ -142,40 +178,50 @@ mod tests {
         PathPlaceholders::from_path(&PathBuf::from("C:\\folder\\file.txt"))
     }
 
+    /// 時刻を固定した実行時コンテキスト（2026-08-15 土曜 14:03:05）
+    fn ctx() -> RunContext {
+        RunContext {
+            now: crate::datetime::test_time(),
+        }
+    }
+
     #[test]
     fn すべてのプレースホルダーを置換する() {
         let ph = placeholders();
-        assert_eq!(ph.replace("$p"), "C:\\folder\\file.txt");
-        assert_eq!(ph.replace("$-p"), "C:\\folder\\file");
-        assert_eq!(ph.replace("$d"), "C:\\folder");
-        assert_eq!(ph.replace("$n"), "file.txt");
-        assert_eq!(ph.replace("$a"), "file");
-        assert_eq!(ph.replace("$f"), "folder");
-        assert_eq!(ph.replace("$e"), "txt");
+        assert_eq!(ph.replace("$p", &ctx()), "C:\\folder\\file.txt");
+        assert_eq!(ph.replace("$-p", &ctx()), "C:\\folder\\file");
+        assert_eq!(ph.replace("$d", &ctx()), "C:\\folder");
+        assert_eq!(ph.replace("$n", &ctx()), "file.txt");
+        assert_eq!(ph.replace("$a", &ctx()), "file");
+        assert_eq!(ph.replace("$f", &ctx()), "folder");
+        assert_eq!(ph.replace("$e", &ctx()), "txt");
     }
 
     #[test]
     fn 拡張子なしパスを先に解釈する() {
         let ph = placeholders();
-        assert_eq!(ph.replace("$-p.7z"), "C:\\folder\\file.7z");
-        assert_eq!(ph.replace("$-p_opt.webp"), "C:\\folder\\file_opt.webp");
+        assert_eq!(ph.replace("$-p.7z", &ctx()), "C:\\folder\\file.7z");
+        assert_eq!(
+            ph.replace("$-p_opt.webp", &ctx()),
+            "C:\\folder\\file_opt.webp"
+        );
     }
 
     #[test]
     fn エスケープしたドルは置換されない() {
         let ph = placeholders();
-        assert_eq!(ph.replace("^$p"), "$p");
-        assert_eq!(ph.replace("^$-p"), "$-p");
-        assert_eq!(ph.replace("^$p $p"), "$p C:\\folder\\file.txt");
+        assert_eq!(ph.replace("^$p", &ctx()), "$p");
+        assert_eq!(ph.replace("^$-p", &ctx()), "$-p");
+        assert_eq!(ph.replace("^$p $p", &ctx()), "$p C:\\folder\\file.txt");
     }
 
     #[test]
     fn エスケープした特殊文字は記号だけが残る() {
         let ph = placeholders();
-        assert_eq!(ph.replace("^@filelist.txt"), "@filelist.txt");
-        assert_eq!(ph.replace("^|"), "|");
-        assert_eq!(ph.replace("^^"), "^");
-        assert_eq!(ph.replace("^&"), "&");
+        assert_eq!(ph.replace("^@filelist.txt", &ctx()), "@filelist.txt");
+        assert_eq!(ph.replace("^|", &ctx()), "|");
+        assert_eq!(ph.replace("^^", &ctx()), "^");
+        assert_eq!(ph.replace("^&", &ctx()), "&");
     }
 
     /// 素の `&` は PowerShell の呼び出し演算子なので、そのまま渡す
@@ -183,26 +229,75 @@ mod tests {
     #[test]
     fn 素のアンパサンドはそのまま渡る() {
         let ph = placeholders();
-        assert_eq!(ph.replace("& 'C:\\a.exe'"), "& 'C:\\a.exe'");
+        assert_eq!(ph.replace("& 'C:\\a.exe'", &ctx()), "& 'C:\\a.exe'");
     }
 
     #[test]
     fn 何もエスケープしないキャレットはそのまま残る() {
         let ph = placeholders();
-        assert_eq!(ph.replace("C:\\Foo^Bar\\app.exe"), "C:\\Foo^Bar\\app.exe");
-        assert_eq!(ph.replace("末尾^"), "末尾^");
+        assert_eq!(
+            ph.replace("C:\\Foo^Bar\\app.exe", &ctx()),
+            "C:\\Foo^Bar\\app.exe"
+        );
+        assert_eq!(ph.replace("末尾^", &ctx()), "末尾^");
     }
 
     #[test]
     fn 未知の記号のドルはそのまま残る() {
         let ph = placeholders();
-        assert_eq!(ph.replace("$x"), "$x");
-        assert_eq!(ph.replace("100$"), "100$");
+        assert_eq!(ph.replace("$x", &ctx()), "$x");
+        assert_eq!(ph.replace("100$", &ctx()), "100$");
+    }
+
+    // -----------------------------------------------------------------
+    // 日時（$t{...}）
+    //
+    // 書式そのものの網羅は datetime.rs にある。ここで見るのは、パスの
+    // プレースホルダーやエスケープと同居させたときの振る舞い
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn 日時をパスと組み合わせられる() {
+        let ph = placeholders();
+        assert_eq!(
+            ph.replace("$-p_$t{yyyyMMdd}.zip", &ctx()),
+            "C:\\folder\\file_20260815.zip"
+        );
+        assert_eq!(
+            ph.replace("$d\\backup-$t{yyyy-MM-dd}\\$n", &ctx()),
+            "C:\\folder\\backup-2026-08-15\\file.txt"
+        );
+    }
+
+    /// `^$` を先に解決してしまうと、残った `$t{` が日時として拾われてしまう
+    #[test]
+    fn エスケープした日時は置換されない() {
+        let ph = placeholders();
+        assert_eq!(ph.replace("^$t{yyyy}", &ctx()), "$t{yyyy}");
+        assert_eq!(ph.replace("^$t{yyyy} $t{yyyy}", &ctx()), "$t{yyyy} 2026");
+    }
+
+    /// `$t` 単独は書式ではないので、既存の設定の意味を変えない
+    #[test]
+    fn 中括弧のない_t_はそのまま残る() {
+        let ph = placeholders();
+        assert_eq!(ph.replace("$t", &ctx()), "$t");
+        assert_eq!(ph.replace("100$t 円", &ctx()), "100$t 円");
+    }
+
+    /// 閉じ忘れはパース時にエラーにしているので、ここでは素通しでよい
+    #[test]
+    fn 閉じていない日時はそのまま残る() {
+        let ph = placeholders();
+        assert_eq!(ph.replace("$t{yyyy", &ctx()), "$t{yyyy");
     }
 
     #[test]
     fn 日本語を含む文字列でも壊れない() {
         let ph = placeholders();
-        assert_eq!(ph.replace("出力先は $d です"), "出力先は C:\\folder です");
+        assert_eq!(
+            ph.replace("出力先は $d です", &ctx()),
+            "出力先は C:\\folder です"
+        );
     }
 }
