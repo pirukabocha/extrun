@@ -970,14 +970,15 @@ fn build_item(
         aliases.expand(value, *confirm_line, diags)
     });
 
-    // 日時の書式はここで検証する。書き間違えると誤った文字列が黙って
+    // 日時と入力欄の書式はここで検証する。書き間違えると誤った文字列が黙って
     // ファイル名に入るので、警告ではなくエラーにしてメニューを止める
     for text in args
         .iter()
         .chain(std::iter::once(&working_dir))
         .chain(confirm.iter())
     {
-        if let Some(message) = crate::datetime::validate(text) {
+        let problem = crate::datetime::validate(text).or_else(|| crate::prompt::validate(text));
+        if let Some(message) = problem {
             diags.push(Diag::error(line, message));
         }
     }
@@ -1148,6 +1149,46 @@ fn parse_extensions(
 
 /// 引数を空白区切りで分解する（引用符で空白を含められる）
 #[cfg(test)]
+mod split_args_tests {
+    use super::*;
+
+    /// `$t{...}` と `$?{...}` の中の空白では区切らない
+    #[test]
+    fn プレースホルダーの中括弧の中は区切らない() {
+        assert_eq!(
+            split_args("$t{yyyy-MM-dd HH:mm} $p"),
+            vec!["$t{yyyy-MM-dd HH:mm}", "$p"]
+        );
+        assert_eq!(
+            split_args("$?{$n の新しい名前}"),
+            vec!["$?{$n の新しい名前}"]
+        );
+        // 入れ子も数えられる
+        assert_eq!(
+            split_args("$?{新しい名前=$a $t{yyyy MM}} -f"),
+            vec!["$?{新しい名前=$a $t{yyyy MM}}", "-f"]
+        );
+    }
+
+    /// 素の `{` まで数えると、PowerShell のスクリプトブロックが繋がってしまう
+    #[test]
+    fn 素の中括弧は数えない() {
+        assert_eq!(
+            split_args("-Command { $_ } -Other"),
+            vec!["-Command", "{", "$_", "}", "-Other"]
+        );
+    }
+
+    #[test]
+    fn 引用符はこれまでどおり効く() {
+        assert_eq!(
+            split_args("-Command \"Get-Item 'a b'\" $p"),
+            vec!["-Command", "Get-Item 'a b'", "$p"]
+        );
+    }
+}
+
+#[cfg(test)]
 mod confirm_tests {
     use super::*;
 
@@ -1294,6 +1335,8 @@ fn split_args(text: &str) -> Vec<String> {
     let mut current = String::new();
     let mut started = false;
     let mut quoted = false;
+    // `$t{...}` と `$?{...}` の中括弧の深さ。中の空白では区切らない
+    let mut braces = 0usize;
     let mut i = 0;
 
     while i < bytes.len() {
@@ -1310,7 +1353,21 @@ fn split_args(text: &str) -> Vec<String> {
                 started = true;
                 i += 1;
             }
-            b' ' | b'\t' if !quoted => {
+            // 中括弧を数えるのは `$t{` と `$?{` で開いたものだけ。素の `{` まで
+            // 数えると、PowerShell のスクリプトブロックが引数をまたいで繋がる
+            b'$' if bytes[i + 1..].starts_with(b"t{") || bytes[i + 1..].starts_with(b"?{") => {
+                current.push_str(&text[i..i + 3]);
+                braces += 1;
+                started = true;
+                i += 3;
+            }
+            b'}' if braces > 0 => {
+                current.push('}');
+                braces -= 1;
+                started = true;
+                i += 1;
+            }
+            b' ' | b'\t' if !quoted && braces == 0 => {
                 if started {
                     args.push(std::mem::take(&mut current));
                     started = false;

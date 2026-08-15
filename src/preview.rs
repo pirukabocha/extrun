@@ -12,7 +12,7 @@
 use crate::config::{Config, MenuItem};
 use crate::console;
 use crate::menu::{filter_menu_items, resolve_invocations};
-use crate::placeholder::RunContext;
+use crate::placeholder::{PathPlaceholders, RunContext};
 use crate::Target;
 use std::path::Path;
 
@@ -110,6 +110,7 @@ fn write_items(
 /// 語は設定ファイルの仕様と `--check` のメッセージに合わせる（`作業` のように
 /// 縮めると何を指しているのか読み取れない）。幅は全角スペースで揃える。
 /// `check.rs` の `警告　` と同じやり方で、等幅フォントなら桁が合う。
+const LABEL_PROMPT: &str = "入力　　　　";
 const LABEL_CONFIRM: &str = "実行前の確認";
 const LABEL_PROGRAM: &str = "実行ファイル";
 const LABEL_ARG: &str = "引数　　　　";
@@ -133,12 +134,18 @@ fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out:
         ""
     };
 
+    let base = PathPlaceholders::from_path(&targets[0].path);
+
+    // 入力欄は出さずに既定値で埋める。プレビューがダイアログを出したら、
+    // 「起動せずに確かめる」という目的が成り立たない
+    write_prompts(item, &base, ctx, out);
+
     // 確認は項目に対して 1 回なので、起動ごとの繰り返しの外に出す
     if let Some(message) = &item.confirm {
         let shown = if message.is_empty() {
             "あり（メッセージなし）".to_string()
         } else {
-            crate::placeholder::PathPlaceholders::from_path(&targets[0].path).replace(message, ctx)
+            base.replace(message, ctx)
         };
         out.push_str(&format!("  {}  {}\r\n", LABEL_CONFIRM, shown));
     }
@@ -177,6 +184,33 @@ fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out:
     }
 }
 
+/// `$?{...}` を一覧にし、以降の置換で使う値を決める
+///
+/// 実行時は入力欄が出るが、プレビューでは出せない。既定値があればそれを、
+/// 無ければ `<説明>` を代わりに入れて、コマンドラインの形が見えるようにする。
+///
+/// 項目ごとに入れ直すので、同じ `$?{...}` を別の項目にも書いてあれば
+/// どちらの行にも出る（`RunContext` の答えは項目をまたいで残るため）。
+fn write_prompts(item: &MenuItem, base: &PathPlaceholders, ctx: &RunContext, out: &mut String) {
+    for spec in crate::menu::prompt_specs(item) {
+        let (message, default_value) = crate::prompt::split_spec(spec);
+        let message = base.replace(message, ctx);
+        let default_value = base.replace(default_value, ctx);
+
+        let (value, note) = if default_value.is_empty() {
+            (format!("<{}>", message), "（既定値なし）")
+        } else {
+            (default_value, "（既定値）")
+        };
+
+        out.push_str(&format!(
+            "  {}  {}  → {}{}\r\n",
+            LABEL_PROMPT, message, value, note
+        ));
+        ctx.set_prompt(spec, value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,9 +232,44 @@ mod tests {
 
     /// 時刻を固定した実行時コンテキスト（2026-08-15 土曜 14:03:05）
     fn ctx() -> RunContext {
-        RunContext {
-            now: crate::datetime::test_time(),
-        }
+        RunContext::for_test()
+    }
+
+    /// プレビューは入力欄を出せないので、既定値で埋めて形を見せる
+    #[test]
+    fn 入力欄を既定値で埋めて出す() {
+        let config =
+            config_of("[.txt]\n縮小 | C:\\Windows\\notepad.exe | -w $?{長辺=1280} -o $?{出力名}");
+        let text = report(&config, &[target("a.txt")], &ctx());
+
+        assert!(
+            text.contains("入力　　　　  長辺  → 1280（既定値）"),
+            "{}",
+            text
+        );
+        assert!(
+            text.contains("入力　　　　  出力名  → <出力名>（既定値なし）"),
+            "{}",
+            text
+        );
+        // 引数にも同じ値が入る
+        assert!(text.contains("引数　　　　  1280"), "{}", text);
+        assert!(text.contains("引数　　　　  <出力名>"), "{}", text);
+    }
+
+    /// 説明と既定値の中のプレースホルダーも解決される
+    #[test]
+    fn 入力欄の説明と既定値のプレースホルダーを解決する() {
+        let config = config_of(
+            "[.txt]\n改名 | C:\\Windows\\notepad.exe | $?{$n の新しい名前=$a_$t{yyyyMMdd}}",
+        );
+        let text = report(&config, &[target("a.txt")], &ctx());
+
+        assert!(
+            text.contains("入力　　　　  a.txt の新しい名前  → a_20260815（既定値）"),
+            "{}",
+            text
+        );
     }
 
     /// 実行前に確認が入ることも「何が起きるか」の一部なので出す

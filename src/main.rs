@@ -12,6 +12,7 @@ mod datetime;
 mod menu;
 mod placeholder;
 mod preview;
+mod prompt;
 
 use config::{Config, MenuPosition};
 use std::env;

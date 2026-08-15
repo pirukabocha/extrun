@@ -623,6 +623,13 @@ fn execute_command(item: &MenuItem, targets: &[Target]) {
     // ときに $t{ss} がずれて、まとめて作ったはずのファイル名が揃わなくなる
     let ctx = RunContext::capture();
 
+    // 入力を先に済ませる。あとの確認ダイアログで、入力した値が入った状態の
+    // メッセージを見せられる（`:confirm 長辺 $?{幅} に縮小します` が書ける）
+    let base = PathPlaceholders::from_path(&targets[0].path);
+    if !ask_prompts(item, &base, &ctx) {
+        return;
+    }
+
     // 確認は項目に対して 1 回。対象の数だけ聞かれても答えは変わらない
     if !confirm_execution(item, targets, &ctx) {
         return;
@@ -684,6 +691,51 @@ fn show_spawn_error(exe_path: &Path, reasons: &[String]) {
     }
 
     show_error_dialog("エラー", &message);
+}
+
+/// 項目の中に書かれた `$?{...}` を、重複を除いて書かれた順に集める
+///
+/// 同じ内容を 2 か所に書いても聞かれるのは 1 回。`-w $?{幅} -h $?{幅}` のような
+/// 書き方が意図どおりになる。
+pub fn prompt_specs(item: &MenuItem) -> Vec<&str> {
+    let mut found: Vec<&str> = Vec::new();
+
+    let texts = item
+        .args
+        .iter()
+        .chain(std::iter::once(&item.working_dir))
+        .chain(item.confirm.iter());
+
+    for text in texts {
+        for spec in crate::prompt::specs(text) {
+            if !found.contains(&spec) {
+                found.push(spec);
+            }
+        }
+    }
+
+    found
+}
+
+/// `$?{...}` の答えを集める（すべて答えられたら `true`）
+///
+/// ひとつでもキャンセルされたら、そこで打ち切って実行しない。半端に入力した
+/// ぶんだけで起動すると、意図しない引数でコマンドが走る。
+fn ask_prompts(item: &MenuItem, base: &PathPlaceholders, ctx: &RunContext) -> bool {
+    for spec in prompt_specs(item) {
+        let (message, default_value) = crate::prompt::split_spec(spec);
+        // 説明と既定値の中のプレースホルダーは先に解決する（`$?{$a の新しい名前}`
+        // や `$?{幅=$e}` が書ける）。基準は :dir と同じく最初の対象
+        let message = base.replace(message, ctx);
+        let default_value = base.replace(default_value, ctx);
+
+        match crate::prompt::ask(&message, &default_value) {
+            Some(value) => ctx.set_prompt(spec, value),
+            None => return false,
+        }
+    }
+
+    true
 }
 
 /// 確認ダイアログの本文に並べる対象の数の上限
@@ -801,12 +853,12 @@ mod tests {
         // extrun-config.txt から構築されるメニューの項目数
         // （セパレーターとサブメニューの中身も数える）
         let expected = [
-            (".png", 25),
-            (".jpg", 25),
-            (".gif", 28),
+            (".png", 26),
+            (".jpg", 26),
+            (".gif", 29),
             (".ico", 25),
-            (".bmp", 25),
-            (".tif", 26),
+            (".bmp", 26),
+            (".tif", 27),
             (".mp3", 20),
             (".wav", 20),
             (".mp4", 20),
@@ -860,6 +912,7 @@ mod tests {
                 "画像のサイズを調べる",
                 "形式を変換 (C)",
                 "長辺 1280px に縮小する",
+                "長辺を指定して縮小する",
                 "---",
                 "親フォルダを開いて選択 (S)",
                 "読み取り専用・隠し属性を解除",

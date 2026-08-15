@@ -8,6 +8,7 @@
 
 use crate::config::SPECIALS;
 use crate::datetime::LocalTime;
+use std::cell::RefCell;
 use std::path::Path;
 
 /// 対象のパスから導けない、実行時に決まる値
@@ -16,9 +17,18 @@ use std::path::Path;
 /// こちらは**対象をまたいで共有する**。日時は起動の直前に 1 回だけ確定させる。
 /// 対象ごとに取り直すと、複数選択して個別に起動したときに `$t{ss}` がずれて、
 /// まとめて作ったはずのファイル名が揃わなくなる。
+///
+/// `$?{...}` の答えも同じ理由でここに置く。こちらは**対象ごとに聞かれては
+/// 困る**という、より強い理由がある。`replace()` は対象の数だけ呼ばれるので、
+/// 答えを持たずに毎回聞くと入力欄が何度も出てしまう。
 pub struct RunContext {
     /// `$t{...}` が使う時刻
     pub now: LocalTime,
+    /// `$?{...}` の答え（キーは中括弧の中身そのまま）
+    ///
+    /// `replace()` は `&self` で呼ばれるので `RefCell` で包む。答えを入れるのは
+    /// 置換が始まる前だけなので、借用が重なることはない。
+    prompts: RefCell<Vec<(String, String)>>,
 }
 
 impl RunContext {
@@ -26,6 +36,34 @@ impl RunContext {
     pub fn capture() -> Self {
         RunContext {
             now: LocalTime::now(),
+            prompts: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// 時刻を固定した実行時コンテキスト（2026-08-15 土曜 14:03:05）
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        RunContext {
+            now: crate::datetime::test_time(),
+            prompts: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// `$?{...}` の答えを引く
+    pub fn prompt_value(&self, spec: &str) -> Option<String> {
+        self.prompts
+            .borrow()
+            .iter()
+            .find(|(key, _)| key == spec)
+            .map(|(_, value)| value.clone())
+    }
+
+    /// `$?{...}` の答えを覚える（同じ内容があれば置き換える）
+    pub fn set_prompt(&self, spec: &str, value: String) {
+        let mut prompts = self.prompts.borrow_mut();
+        match prompts.iter_mut().find(|(key, _)| key == spec) {
+            Some(entry) => entry.1 = value,
+            None => prompts.push((spec.to_string(), value)),
         }
     }
 }
@@ -145,6 +183,25 @@ impl PathPlaceholders {
                         None => i += 1,
                     }
                 }
+                // `$?{...}` は起動より前に答えを集めてある。ここは引くだけ。
+                // 中の `$t{...}` を数え違えないよう、終端の探し方も揃える
+                b'$' if bytes[i + 1..].starts_with(b"?{") => {
+                    match crate::prompt::find_close(&bytes[i + 3..]) {
+                        Some(end) => {
+                            let spec = &text[i + 3..i + 3 + end];
+                            out.push_str(&text[chunk..i]);
+                            match ctx.prompt_value(spec) {
+                                Some(value) => out.push_str(&value),
+                                // 答えを集めずに呼んだとき。消してしまうと
+                                // 気づけないので、書かれたまま残す
+                                None => out.push_str(&text[i..i + 3 + end + 1]),
+                            }
+                            i = i + 3 + end + 1;
+                            chunk = i;
+                        }
+                        None => i += 1,
+                    }
+                }
                 b'$' => match self.lookup(&bytes[i + 1..]) {
                     Some((value, len)) => {
                         out.push_str(&text[chunk..i]);
@@ -180,9 +237,7 @@ mod tests {
 
     /// 時刻を固定した実行時コンテキスト（2026-08-15 土曜 14:03:05）
     fn ctx() -> RunContext {
-        RunContext {
-            now: crate::datetime::test_time(),
-        }
+        RunContext::for_test()
     }
 
     #[test]
@@ -290,6 +345,64 @@ mod tests {
     fn 閉じていない日時はそのまま残る() {
         let ph = placeholders();
         assert_eq!(ph.replace("$t{yyyy", &ctx()), "$t{yyyy");
+    }
+
+    // -----------------------------------------------------------------
+    // 入力欄（$?{...}）
+    //
+    // 答えを集めるのは menu.rs / preview.rs の仕事。ここで見るのは、
+    // 集めた答えの引き方とエスケープとの兼ね合い
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn 集めた答えに置き換わる() {
+        let ph = placeholders();
+        let ctx = ctx();
+        ctx.set_prompt("長辺=1280", "800".to_string());
+
+        assert_eq!(
+            ph.replace("-resize $?{長辺=1280} $p", &ctx),
+            "-resize 800 C:\\folder\\file.txt"
+        );
+    }
+
+    /// 同じ内容の `$?{...}` は同じ答えになる（聞かれるのは 1 回）
+    #[test]
+    fn 同じ入力欄は同じ答えになる() {
+        let ph = placeholders();
+        let ctx = ctx();
+        ctx.set_prompt("幅", "640".to_string());
+
+        assert_eq!(ph.replace("-w $?{幅} -h $?{幅}", &ctx), "-w 640 -h 640");
+    }
+
+    /// `^$` を先に解決してしまうと、残った `$?{` が入力欄として拾われてしまう
+    #[test]
+    fn エスケープした入力欄は置換されない() {
+        let ph = placeholders();
+        let ctx = ctx();
+        ctx.set_prompt("幅", "640".to_string());
+
+        assert_eq!(ph.replace("^$?{幅}", &ctx), "$?{幅}");
+        assert_eq!(ph.replace("^$?{幅} $?{幅}", &ctx), "$?{幅} 640");
+    }
+
+    /// `$?` 単独は入力欄ではないので、既存の設定の意味を変えない
+    #[test]
+    fn 中括弧のない疑問符はそのまま残る() {
+        let ph = placeholders();
+        assert_eq!(ph.replace("$?", &ctx()), "$?");
+        assert_eq!(ph.replace("-o $?x", &ctx()), "-o $?x");
+    }
+
+    /// 答えを集めずに呼んだときは、消さずに書かれたまま残す
+    #[test]
+    fn 答えのない入力欄はそのまま残る() {
+        let ph = placeholders();
+        assert_eq!(
+            ph.replace("-w $?{幅} $p", &ctx()),
+            "-w $?{幅} C:\\folder\\file.txt"
+        );
     }
 
     #[test]
