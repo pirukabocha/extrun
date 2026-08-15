@@ -93,7 +93,13 @@ if (-not (Test-Path -LiteralPath $exe)) { throw "ビルド結果が見つかり�
 
 # --- 配布物の組み立て -------------------------------------------------
 Write-Host '==> 配布物を組み立て' -ForegroundColor Cyan
-if (Test-Path -LiteralPath $Dist) { Remove-Item -LiteralPath $Dist -Recurse -Force }
+# 消すのは今回の版の出力だけにする。dist\ ごと消すと、前の版の zip を
+# 何かが開いている（エクスプローラでプレビューした、別のターミナルで
+# 中身を見た など）だけでビルドが止まる。前の版が残っていても邪魔に
+# ならないし、dist\ は .gitignore の対象。
+foreach ($stale in @($Staging, $ZipPath, "$ZipPath.sha256")) {
+    if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Recurse -Force }
+}
 $null = New-Item -ItemType Directory -Path $Payload -Force
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $Payload 'extrun.exe')
@@ -134,5 +140,11 @@ Write-Host ("       {0:N0} バイト" -f (Get-Item -LiteralPath $ZipPath).Length
 Write-Host "SHA256: $hash"
 Write-Host ''
 Write-Host '中身:'
-[System.IO.Compression.ZipFile]::OpenRead($ZipPath).Entries |
-    ForEach-Object { '  {0,10:N0}  {1}' -f $_.Length, $_.FullName }
+# Dispose を忘れるとハンドルが開いたままになり、同じターミナルで
+# もう一度このスクリプトを走らせたときに zip を消せなくなる。
+$archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+try {
+    $archive.Entries | ForEach-Object { '  {0,10:N0}  {1}' -f $_.Length, $_.FullName }
+} finally {
+    $archive.Dispose()
+}
