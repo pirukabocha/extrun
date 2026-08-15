@@ -180,7 +180,7 @@ OK   @code = C:\Users\yourname\AppData\Local\Programs\Microsoft VS Code\Code.exe
 PS1 を実行   | @powershell | -NoProfile -ExecutionPolicy Bypass -File C:\Tools\scripts\convert.ps1 -Path "$p"
 ```
 
-`.bat` を直接書いた場合は、選んだ瞬間に「起動できませんでした」のダイアログが出ます（`--check` はパスが実在するかしか見ないので、ここは通ってしまいます）。
+`.bat` を直接書いた場合は、`--check` が警告します。気づかないまま実行しても、選んだ瞬間に「起動できませんでした」のダイアログが同じ案内を出します。
 
 ### 2-8. `+`（まとめて渡す）が向くもの・向かないもの
 

@@ -9,6 +9,7 @@
 
 use crate::config::{Config, Diag, MenuItem, Severity};
 use crate::console;
+use crate::menu;
 use std::path::Path;
 
 /// 設定ファイルを検証して結果を出力し、終了コードを返す
@@ -111,6 +112,14 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
             diags.push(Diag::warning(
                 item.line,
                 format!("実行ファイルが見つかりません: {}", item.path),
+            ));
+        }
+
+        // 起動を試みた時点でも同じ案内を出すが、書いた時点で気づけるほうが早い
+        if menu::needs_interpreter(path) {
+            diags.push(Diag::warning(
+                item.line,
+                format!("{}: {}", menu::INTERPRETER_HINT, item.path),
             ));
         }
 
@@ -262,6 +271,44 @@ mod tests {
         assert!(diags
             .iter()
             .any(|d| d.message.contains("実行するパスがありません")));
+    }
+
+    /// CreateProcess はスクリプトを起動できないので、書いた時点で知らせる
+    #[test]
+    fn スクリプトを直接指定した項目を警告する() {
+        let diags = diags_of("[.txt]\nX | C:\\tools\\run.bat");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("スクリプトは直接起動できません")),
+            "{:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn スクリプトの判定は大文字小文字を区別しない() {
+        let diags = diags_of("[.txt]\nX | C:\\tools\\RUN.PS1");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("スクリプトは直接起動できません")),
+            "{:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn インタプリタ経由なら警告しない() {
+        let diags =
+            diags_of("[.txt]\nX | C:\\Windows\\System32\\cmd.exe | /c C:\\tools\\run.bat $p");
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("スクリプトは直接起動できません")),
+            "{:?}",
+            diags
+        );
     }
 
     /// 実行されない項目に付けた :confirm は黙って捨てられるので警告する

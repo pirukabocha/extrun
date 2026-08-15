@@ -802,18 +802,33 @@ fn show_spawn_error(exe_path: &Path, reasons: &[String]) {
         message.push_str(&format!("\n\n{} 件が起動できませんでした。", reasons.len()));
     }
 
-    // CreateProcess はバッチファイルやスクリプトを直接起動できない
-    let extension = exe_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase());
-    if let Some("bat" | "cmd" | "ps1" | "vbs" | "js") = extension.as_deref() {
-        message.push_str(
-            "\n\nスクリプトは直接起動できません。cmd.exe /c や powershell.exe -File を経由してください。",
-        );
+    if needs_interpreter(exe_path) {
+        message.push_str(&format!("\n\n{}。", INTERPRETER_HINT));
     }
 
     show_error_dialog("エラー", &message);
+}
+
+/// スクリプトを直接指定していたときの案内
+///
+/// 実行時のエラーダイアログと `--check` の警告で同じ文言を使う。句点は
+/// 付けない（`--check` は末尾にパスを続けるため）。
+pub const INTERPRETER_HINT: &str =
+    "スクリプトは直接起動できません。cmd.exe /c や powershell.exe -File を経由してください";
+
+/// `CreateProcess` が実行ファイルとして起動できない拡張子か
+///
+/// `Command::spawn` は `CreateProcess` なので、バッチやスクリプトを直接は
+/// 起動できない（関連付けを見るのは `ShellExecute` の仕事）。実行時の失敗
+/// ダイアログと `--check` の警告が同じ判断をするよう、表はここ 1 か所に置く。
+pub fn needs_interpreter(exe_path: &Path) -> bool {
+    let Some(extension) = exe_path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    matches!(
+        extension.to_lowercase().as_str(),
+        "bat" | "cmd" | "ps1" | "vbs" | "js"
+    )
 }
 
 /// 項目の中に書かれた入力欄を、重複を除いて書かれた順に集める
