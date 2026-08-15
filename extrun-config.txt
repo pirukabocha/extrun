@@ -111,10 +111,13 @@ select-first = no
 # $?{...} は実行するときに入力欄を出します。= の右は既定値で、選択された
 # 状態で入るので Enter だけで確定できます。同じ内容を 2 か所に書いても
 # 聞かれるのは 1 回なので、下では入力した値が出力先の名前にも入ります。
+# $? と { のあいだの int は「整数だけを受け付ける」指定です。
+# ほかに num（数値）と name（ファイル名に使える文字）が使えます。
+# 満たさない入力は理由を添えて聞き直されます。
 # （PowerShell の $? は中括弧が続かないのでそのまま渡ります）
 長辺を指定して縮小する [-.ico]
  | @powershell
- | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$r=[Math]::Min(1.0,$?{長辺のピクセル数=1280}/[Math]::Max(^$i.Width,^$i.Height)); ^$b=[System.Drawing.Bitmap]::new(^$i,[int](^$i.Width*^$r),[int](^$i.Height*^$r)); ^$b.Save('$d\$a_$?{長辺のピクセル数=1280}px.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$b.Dispose(); ^$i.Dispose()"
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$r=[Math]::Min(1.0,$?int{長辺のピクセル数=1280}/[Math]::Max(^$i.Width,^$i.Height)); ^$b=[System.Drawing.Bitmap]::new(^$i,[int](^$i.Width*^$r),[int](^$i.Height*^$r)); ^$b.Save('$d\$a_$?int{長辺のピクセル数=1280}px.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$b.Dispose(); ^$i.Dispose()"
 
 
 # =====================================================================

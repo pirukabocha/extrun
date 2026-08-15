@@ -693,12 +693,12 @@ fn show_spawn_error(exe_path: &Path, reasons: &[String]) {
     show_error_dialog("エラー", &message);
 }
 
-/// 項目の中に書かれた `$?{...}` を、重複を除いて書かれた順に集める
+/// 項目の中に書かれた入力欄を、重複を除いて書かれた順に集める
 ///
-/// 同じ内容を 2 か所に書いても聞かれるのは 1 回。`-w $?{幅} -h $?{幅}` のような
+/// 同じ書き方を 2 か所に置いても聞かれるのは 1 回。`-w $?{幅} -h $?{幅}` のような
 /// 書き方が意図どおりになる。
-pub fn prompt_specs(item: &MenuItem) -> Vec<&str> {
-    let mut found: Vec<&str> = Vec::new();
+pub fn item_prompts(item: &MenuItem) -> Vec<crate::prompt::Prompt<'_>> {
+    let mut found: Vec<crate::prompt::Prompt<'_>> = Vec::new();
 
     let texts = item
         .args
@@ -707,9 +707,9 @@ pub fn prompt_specs(item: &MenuItem) -> Vec<&str> {
         .chain(item.confirm.iter());
 
     for text in texts {
-        for spec in crate::prompt::specs(text) {
-            if !found.contains(&spec) {
-                found.push(spec);
+        for prompt in crate::prompt::prompts(text) {
+            if !found.iter().any(|found| found.source == prompt.source) {
+                found.push(prompt);
             }
         }
     }
@@ -722,15 +722,14 @@ pub fn prompt_specs(item: &MenuItem) -> Vec<&str> {
 /// ひとつでもキャンセルされたら、そこで打ち切って実行しない。半端に入力した
 /// ぶんだけで起動すると、意図しない引数でコマンドが走る。
 fn ask_prompts(item: &MenuItem, base: &PathPlaceholders, ctx: &RunContext) -> bool {
-    for spec in prompt_specs(item) {
-        let (message, default_value) = crate::prompt::split_spec(spec);
+    for prompt in item_prompts(item) {
         // 説明と既定値の中のプレースホルダーは先に解決する（`$?{$a の新しい名前}`
         // や `$?{幅=$e}` が書ける）。基準は :dir と同じく最初の対象
-        let message = base.replace(message, ctx);
-        let default_value = base.replace(default_value, ctx);
+        let message = base.replace(prompt.message, ctx);
+        let default_value = base.replace(prompt.default_value, ctx);
 
-        match crate::prompt::ask(&message, &default_value) {
-            Some(value) => ctx.set_prompt(spec, value),
+        match crate::prompt::ask(prompt.rule, &message, &default_value) {
+            Some(value) => ctx.set_prompt(prompt.source, value),
             None => return false,
         }
     }

@@ -24,7 +24,10 @@ use std::path::Path;
 pub struct RunContext {
     /// `$t{...}` が使う時刻
     pub now: LocalTime,
-    /// `$?{...}` の答え（キーは中括弧の中身そのまま）
+    /// `$?{...}` の答え
+    ///
+    /// 見出しは `$?int{長辺=1280}` のように**書かれたとおりの文字列全体**。
+    /// 決まりの語まで含めないと、`$?{幅}` と `$?int{幅}` が同じ答えを共有する。
     ///
     /// `replace()` は `&self` で呼ばれるので `RefCell` で包む。答えを入れるのは
     /// 置換が始まる前だけなので、借用が重なることはない。
@@ -184,21 +187,22 @@ impl PathPlaceholders {
                     }
                 }
                 // `$?{...}` は起動より前に答えを集めてある。ここは引くだけ。
-                // 中の `$t{...}` を数え違えないよう、終端の探し方も揃える
-                b'$' if bytes[i + 1..].starts_with(b"?{") => {
-                    match crate::prompt::find_close(&bytes[i + 3..]) {
-                        Some(end) => {
-                            let spec = &text[i + 3..i + 3 + end];
+                // 書き方の解釈は prompt.rs に任せる（決まりの語や中の `$t{...}` を
+                // 数え違えないよう、終端の探し方をひとつにしておく）
+                b'$' if bytes.get(i + 1) == Some(&b'?') => {
+                    match crate::prompt::parse_at(text, i) {
+                        Some((prompt, end)) => {
                             out.push_str(&text[chunk..i]);
-                            match ctx.prompt_value(spec) {
+                            match ctx.prompt_value(prompt.source) {
                                 Some(value) => out.push_str(&value),
                                 // 答えを集めずに呼んだとき。消してしまうと
                                 // 気づけないので、書かれたまま残す
-                                None => out.push_str(&text[i..i + 3 + end + 1]),
+                                None => out.push_str(prompt.source),
                             }
-                            i = i + 3 + end + 1;
+                            i = end;
                             chunk = i;
                         }
+                        // 入力欄ではない（PowerShell の `$?` など）
                         None => i += 1,
                     }
                 }
@@ -358,7 +362,7 @@ mod tests {
     fn 集めた答えに置き換わる() {
         let ph = placeholders();
         let ctx = ctx();
-        ctx.set_prompt("長辺=1280", "800".to_string());
+        ctx.set_prompt("$?{長辺=1280}", "800".to_string());
 
         assert_eq!(
             ph.replace("-resize $?{長辺=1280} $p", &ctx),
@@ -371,7 +375,7 @@ mod tests {
     fn 同じ入力欄は同じ答えになる() {
         let ph = placeholders();
         let ctx = ctx();
-        ctx.set_prompt("幅", "640".to_string());
+        ctx.set_prompt("$?{幅}", "640".to_string());
 
         assert_eq!(ph.replace("-w $?{幅} -h $?{幅}", &ctx), "-w 640 -h 640");
     }
@@ -381,7 +385,7 @@ mod tests {
     fn エスケープした入力欄は置換されない() {
         let ph = placeholders();
         let ctx = ctx();
-        ctx.set_prompt("幅", "640".to_string());
+        ctx.set_prompt("$?{幅}", "640".to_string());
 
         assert_eq!(ph.replace("^$?{幅}", &ctx), "$?{幅}");
         assert_eq!(ph.replace("^$?{幅} $?{幅}", &ctx), "$?{幅} 640");

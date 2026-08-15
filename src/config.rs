@@ -1329,6 +1329,14 @@ mod datetime_tests {
     }
 }
 
+/// 中括弧を開くプレースホルダー（`$t{` / `$?{` / `$?int{` …）の長さ
+fn placeholder_open_len(text: &str, i: usize) -> Option<usize> {
+    if text.as_bytes()[i..].starts_with(b"$t{") {
+        return Some(3);
+    }
+    crate::prompt::opening_len(text, i)
+}
+
 fn split_args(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut args = Vec::new();
@@ -1347,19 +1355,21 @@ fn split_args(text: &str) -> Vec<String> {
             continue;
         }
 
+        // 中括弧を数えるのは `$t{` と `$?...{` で開いたものだけ。素の `{` まで
+        // 数えると、PowerShell のスクリプトブロックが引数をまたいで繋がる
+        if let Some(len) = placeholder_open_len(text, i) {
+            current.push_str(&text[i..i + len]);
+            braces += 1;
+            started = true;
+            i += len;
+            continue;
+        }
+
         match bytes[i] {
             b'"' => {
                 quoted = !quoted;
                 started = true;
                 i += 1;
-            }
-            // 中括弧を数えるのは `$t{` と `$?{` で開いたものだけ。素の `{` まで
-            // 数えると、PowerShell のスクリプトブロックが引数をまたいで繋がる
-            b'$' if bytes[i + 1..].starts_with(b"t{") || bytes[i + 1..].starts_with(b"?{") => {
-                current.push_str(&text[i..i + 3]);
-                braces += 1;
-                started = true;
-                i += 3;
             }
             b'}' if braces > 0 => {
                 current.push('}');

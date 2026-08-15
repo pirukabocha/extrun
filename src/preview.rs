@@ -192,10 +192,9 @@ fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out:
 /// 項目ごとに入れ直すので、同じ `$?{...}` を別の項目にも書いてあれば
 /// どちらの行にも出る（`RunContext` の答えは項目をまたいで残るため）。
 fn write_prompts(item: &MenuItem, base: &PathPlaceholders, ctx: &RunContext, out: &mut String) {
-    for spec in crate::menu::prompt_specs(item) {
-        let (message, default_value) = crate::prompt::split_spec(spec);
-        let message = base.replace(message, ctx);
-        let default_value = base.replace(default_value, ctx);
+    for prompt in crate::menu::item_prompts(item) {
+        let message = base.replace(prompt.message, ctx);
+        let default_value = base.replace(prompt.default_value, ctx);
 
         let (value, note) = if default_value.is_empty() {
             (format!("<{}>", message), "（既定値なし）")
@@ -204,10 +203,24 @@ fn write_prompts(item: &MenuItem, base: &PathPlaceholders, ctx: &RunContext, out
         };
 
         out.push_str(&format!(
-            "  {}  {}  → {}{}\r\n",
-            LABEL_PROMPT, message, value, note
+            "  {}  {}{}  → {}{}\r\n",
+            LABEL_PROMPT,
+            message,
+            rule_note(prompt.rule),
+            value,
+            note
         ));
-        ctx.set_prompt(spec, value);
+        ctx.set_prompt(prompt.source, value);
+    }
+}
+
+/// 入力欄に課された決まりの表示（制限なしなら空）
+fn rule_note(rule: crate::prompt::Rule) -> &'static str {
+    match rule {
+        crate::prompt::Rule::Any => "",
+        crate::prompt::Rule::Int => " [整数]",
+        crate::prompt::Rule::Num => " [数値]",
+        crate::prompt::Rule::Name => " [ファイル名]",
     }
 }
 
