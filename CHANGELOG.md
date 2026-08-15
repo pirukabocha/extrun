@@ -13,7 +13,7 @@
 書き方は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、
 バージョン番号は [セマンティック バージョニング](https://semver.org/lang/ja/) に従います。
 
-## [Unreleased]
+## [1.3.0] - 2026-08-15
 
 ### 追加
 
@@ -22,7 +22,6 @@
   - 未定義の変数は `%FOO%` のまま残る。`--check` の「実行ファイルが見つかりません」に展開されていない姿で出るので、綴りの間違いはそこで分かる
   - 大文字小文字は区別しない。`%%` や閉じ忘れの `%` はそのまま残るので、`C:\100%\app.exe` のようなパスも書ける
   - 展開は設定ファイルを読む時点で済ませるので、**対象のファイル名に含まれる `%` は展開されない**（`100%OFF.png` はそのまま扱われる）
-
 - 項目ごとの拡張子指定に**足し算 `[+.svg]`** を追加。受け継いだ拡張子に足せるようになった（これまでは引き算 `[-.jpg]` か、全部書き直す完全置換 `[.png .jpg .svg]` の 2 択だった）
   - `[+.svg -.jpg]` のように引き算と混ぜて書ける。どちらも「受け継いだものからの差分」で、向き以外の扱いは同じ
   - すでに受け継いでいる拡張子を足しても重複しない
@@ -135,6 +134,7 @@
 - `extrun-recipes.md` — ffmpeg / ImageMagick / IrfanView / 7-Zip / VS Code / VLC / Pandoc などの設定例集と、AutoHotkey から呼び出す例
 - `packaging/readme.txt` — 配布 zip に同梱する説明書
 
+[1.3.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.3.0
 [1.2.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.2.0
 [1.1.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.1.0
 [1.0.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.0.0
