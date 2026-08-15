@@ -46,7 +46,11 @@ const USAGE: &str = "\
   --select-first     先頭の項目を選択した状態で開く
   --no-select-first  選択しない状態で開く
 
-設定ファイルは extrun.exe と同じフォルダの extrun-config.txt です。";
+どのモードでも使えるオプション:
+  --config <パス>    読み込む設定ファイルを指定する
+                     （相対パスはカレントディレクトリ基準）
+
+設定ファイルは、既定では extrun.exe と同じフォルダの extrun-config.txt です。";
 
 /// ターゲットファイル/フォルダの情報
 #[derive(Debug, Clone)]
@@ -137,6 +141,37 @@ fn take_options(args: Vec<String>) -> Result<(Overrides, Vec<String>), String> {
     Ok((overrides, paths))
 }
 
+/// `--config <パス>` を取り出し、残りの引数を返す
+///
+/// `--check` は `take_options` より前で処理されるので、設定ファイルの指定も
+/// そこより前に切り出す必要がある。`take_options` ごと前に動かさないのは、
+/// `--at` の書き間違いで `--version` や `--help` まで出せなくなるため。
+fn take_config_path(args: Vec<String>) -> Result<(Option<PathBuf>, Vec<String>), String> {
+    const MISSING_VALUE: &str = "--config には設定ファイルのパスを指定してください";
+
+    let mut config = None;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut args = args.into_iter();
+
+    while let Some(arg) = args.next() {
+        // `--config 値` と `--config=値` の両方を受ける
+        let value = match arg.strip_prefix("--config") {
+            Some("") => Some(args.next().ok_or_else(|| MISSING_VALUE.to_string())?),
+            // 別の語を巻き込まないよう、`=` があるときだけ値と見なす
+            Some(value) => value.strip_prefix('=').map(|value| value.to_string()),
+            None => None,
+        };
+
+        match value {
+            Some(value) if value.is_empty() => return Err(MISSING_VALUE.to_string()),
+            Some(value) => config = Some(PathBuf::from(value)),
+            None => rest.push(arg),
+        }
+    }
+
+    Ok((config, rest))
+}
+
 /// パスを絶対パスに変換（\\?\ プレフィックスなし）
 fn to_absolute_path(path: &PathBuf) -> PathBuf {
     if path.is_absolute() {
@@ -148,14 +183,21 @@ fn to_absolute_path(path: &PathBuf) -> PathBuf {
     }
 }
 
-/// 設定ファイルのパス（実行ファイルと同じフォルダ）
-fn config_path() -> Option<PathBuf> {
-    Some(
-        env::current_exe()
-            .ok()?
-            .parent()?
-            .join(config::CONFIG_FILE_NAME),
-    )
+/// 設定ファイルのパス
+///
+/// 既定は実行ファイルと同じフォルダ。`--config` で指定されたときは**カレント
+/// ディレクトリ基準**で解決する（`cd` した先から `--config test\a.txt` と
+/// 打てるほうが、テスト用の設定を切り替える用途に合う）。
+fn config_path(override_path: Option<PathBuf>) -> Option<PathBuf> {
+    match override_path {
+        Some(path) => Some(to_absolute_path(&path)),
+        None => Some(
+            env::current_exe()
+                .ok()?
+                .parent()?
+                .join(config::CONFIG_FILE_NAME),
+        ),
+    }
 }
 
 /// プロセスをモニタごとの DPI に対応させる
@@ -182,12 +224,25 @@ fn enable_dpi_awareness() {
 fn main() {
     enable_dpi_awareness();
 
-    let Some(config_path) = config_path() else {
+    let args: Vec<String> = env::args().skip(1).collect();
+
+    // 設定ファイルの指定は `--check` より前に切り出す（`--check --config x` が効くように）。
+    // エラーの出し先は、コンソールに出す 2 つのモードかどうかで決める
+    let to_console = args
+        .iter()
+        .any(|arg| arg == "--preview" || arg == "--check");
+    let (config_override, args) = match take_config_path(args) {
+        Ok(result) => result,
+        Err(message) => {
+            report_usage_error(to_console, &format!("{}\n\n{}", message, USAGE));
+            std::process::exit(1);
+        }
+    };
+
+    let Some(config_path) = config_path(config_override) else {
         show_error_dialog("エラー", "実行ファイルの場所を取得できません。");
         std::process::exit(1);
     };
-
-    let args: Vec<String> = env::args().skip(1).collect();
 
     // 設定ファイルの検証
     if args.iter().any(|arg| arg == "--check") {
@@ -361,6 +416,52 @@ mod tests {
 
     fn take(args: &[&str]) -> Result<(Overrides, Vec<String>), String> {
         take_options(args.iter().map(|s| s.to_string()).collect())
+    }
+
+    fn take_config(args: &[&str]) -> Result<(Option<PathBuf>, Vec<String>), String> {
+        take_config_path(args.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn 設定ファイルの指定を取り除いてパスだけ返す() {
+        let (config, rest) = take_config(&["--config", "test.txt", "a.txt"]).unwrap();
+        assert_eq!(config, Some(PathBuf::from("test.txt")));
+        assert_eq!(rest, vec!["a.txt"]);
+    }
+
+    #[test]
+    fn イコール付きの設定ファイル指定も読める() {
+        let (config, rest) = take_config(&["--config=D:\\t\\c.txt", "a.txt"]).unwrap();
+        assert_eq!(config, Some(PathBuf::from("D:\\t\\c.txt")));
+        assert_eq!(rest, vec!["a.txt"]);
+    }
+
+    /// `--check` は `take_options` より前で処理されるので、そこでも効く必要がある
+    #[test]
+    fn 検証モードと一緒でも設定ファイルを指定できる() {
+        let (config, rest) = take_config(&["--check", "--config", "test.txt"]).unwrap();
+        assert_eq!(config, Some(PathBuf::from("test.txt")));
+        assert_eq!(rest, vec!["--check"]);
+    }
+
+    #[test]
+    fn 指定がなければ設定ファイルは既定のまま() {
+        let (config, rest) = take_config(&["a.txt", "b.txt"]).unwrap();
+        assert_eq!(config, None);
+        assert_eq!(rest, vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn 値の無い設定ファイル指定はエラー() {
+        assert!(take_config(&["--config"]).is_err());
+        assert!(take_config(&["--config=", "a.txt"]).is_err());
+    }
+
+    #[test]
+    fn 前方一致する別の語は設定ファイル指定にしない() {
+        let (config, rest) = take_config(&["--configure", "a.txt"]).unwrap();
+        assert_eq!(config, None);
+        assert_eq!(rest, vec!["--configure", "a.txt"]);
     }
 
     #[test]

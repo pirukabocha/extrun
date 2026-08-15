@@ -106,6 +106,7 @@ VS Code で開く | C:\Program Files\Microsoft VS Code\Code.exe | -n $p
 ```powershell
 extrun.exe --check                       # 書式・別名・実行ファイルのパスを検証
 extrun.exe --preview "C:\photo\a.jpg"    # 起動せずにコマンドラインを表示
+extrun.exe --config D:\test\my.txt ...   # 別の設定ファイルで試す（どのモードでも使えます）
 ```
 
 `--check` が**書式**を見るのに対して、`--preview` は**そのパスに対して実際に何が起動されるか**を見せます。引数は 1 つ 1 行で表示されるので、`"..."` で囲み忘れて空白で割れた引数を見つけられます。
