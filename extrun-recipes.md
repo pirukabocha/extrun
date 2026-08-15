@@ -316,7 +316,7 @@ GIF にする（パレット最適化）
 
 ## 4. ImageMagick / IrfanView — 画像
 
-> 想定バージョン: ImageMagick 7.x（`magick.exe` の 1 本にまとまった世代）/ IrfanView 4.6x + 64bit 版
+> 想定バージョン: [ImageMagick](https://imagemagick.org/) 7.x（`magick.exe` の 1 本にまとまった世代）/ [IrfanView](https://www.irfanview.com/) 4.7x + 64bit 版
 > 同じ用途を CLI 派（ImageMagick）と GUI 派（IrfanView）の両方で書いてあります。両方使う必要はありません。
 
 ```
@@ -409,7 +409,7 @@ IrfanView でサムネイル表示 | @irfan | /thumbs $p
 
 ## 5. 7-Zip — 圧縮・展開
 
-> 想定バージョン: 7-Zip 23.x / 24.x
+> 想定バージョン: [7-Zip](https://www.7-zip.org/) 26.x
 > ExtRun から利用する用途としては需要が一番大きい分野です。同梱サンプルの `tar.exe` の項目を、そのまま置き換えられます。
 
 ```
@@ -474,6 +474,7 @@ IrfanView でサムネイル表示 | @irfan | /thumbs $p
 
 ## 6. VS Code — 開く・比べる
 
+> [Visual Studio Code](https://code.visualstudio.com/) 
 > 既定ではユーザーごとの場所にインストールされます。System Installer を使った場合は `C:\Program Files\Microsoft VS Code\Code.exe` です。
 
 ```
@@ -511,6 +512,8 @@ VS Code で開く                   | @code | $p
 ---
 
 ## 7. VLC — 再生する
+
+> 想定バージョン: [VLC media player](https://www.videolan.org/) 3.x
 
 ```
 @vlc = C:\Program Files\VideoLAN\VLC\vlc.exe
@@ -584,6 +587,7 @@ Git
 
 ## 9. Pandoc — 文書を変換する
 
+> 想定バージョン: [Pandoc](https://pandoc.org/) 3.x
 > 引数が短く、拡張子の指定（継承・引き算・完全置換）の効きが分かりやすいので、書式を覚えるのにも向いています。
 
 ```
@@ -613,7 +617,8 @@ Markdown にする | @pandoc | $p -t gfm -o $-p.md
 
 ## 10. 画像最適化 — oxipng / pngquant / cwebp
 
-Web 用の画像を扱う人向け。どれも単機能の CLI なので、レシピの型 2 の練習にちょうど良い題材です。
+> 想定バージョン: [oxipng](https://github.com/oxipng/oxipng) 10.x / [pngquant](https://pngquant.org/) 3.x / [cwebp](https://developers.google.com/speed/webp/download?hl=ja)
+> Web 用の画像を扱う人向け。どれも単機能の CLI なので、レシピの型 2 の練習にちょうど良い題材です。
 
 ```
 @tools    = C:\Tools

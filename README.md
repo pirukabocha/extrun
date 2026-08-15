@@ -1,6 +1,6 @@
 # ExtRun
 
-**ExtRun** は、ファイルやフォルダを拡張子ごとのコンテキストメニューから素早くお気に入りのアプリケーションで開くための Windows 向けランチャーツールです。
+**ExtRun** は、拡張子に関連付けられたコンテキストメニューから、ファイルやフォルダを任意のアプリで開く Windows 用ランチャーです。
 
 > **In English** — ExtRun is a tiny Windows launcher written in Rust. Pass it file or folder paths and it pops up a context menu at the cursor, showing only the commands that apply to those file types, then spawns the one you pick and exits. Menus are defined in a single plain-text config file (one line per entry) next to the executable. No installer, no background process, no registry writes. Documentation is in Japanese; the config file format is summarized under [設定ファイル](#設定ファイル-extrun-configtxt) and specified in full in [extrun-config-format.md](extrun-config-format.md).
 
@@ -12,8 +12,7 @@
 - **🎯 拡張子ベースフィルタリング**: ファイルの種類に応じて適切なアプリだけを表示
 - **📁 複数ファイル対応**: 一度に複数のファイル/フォルダを処理可能
 - **🔧 柔軟な設定**: 1行1項目のシンプルな設定ファイル
-- **⌨️ アクセスキー**: 項目名に `&` を書けばキーひとつで実行
-- **🖱️ 表示位置を選べる**: カーソル位置・ウィンドウ中央・画面中央・座標指定。引数でも切り替え可能
+- **🖱️ マウスとキーボードの両方に配慮**: ユーザーの入力環境を問わず利用しやすい操作感
 - **💾 省メモリ**: 実行時の依存クレートは `windows-sys` のみ
 
 ## インストール
