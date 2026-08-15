@@ -101,6 +101,7 @@ icons = specified
 
 # 名前の直後の [-...] は「継承した拡張子からの引き算」。
 # .png を対象から外すので、PNG のときだけ「PNG に変換」は出ません。
+# 逆に [+...] と書くと、継承したものに足せます（下の「文字数・行数を数える」）。
 形式を変換 (&C)
 > &PNG に変換 [-.png]
  | @powershell
@@ -112,7 +113,7 @@ icons = specified
  | @powershell
  | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.bmp',[System.Drawing.Imaging.ImageFormat]::Bmp); ^$i.Dispose()"
 > ---
-# [-] の付かない指定は「継承を無視して完全に置き換える」。
+# 符号（+ / -）の付かない指定は「継承を無視して完全に置き換える」。
 # GIF のときだけ出ます。
 > 1 コマ目を PNG で取り出す (&F) [.gif]
  | @powershell
@@ -188,7 +189,9 @@ CAB を展開する [.cab]
 メモ帳で開く (&N) | @notepad
 :icon @sys\imageres.dll,247
 
-文字数・行数を数える
+# [+...] は「継承した拡張子への足し算」。@テキスト に無いスクリプト類も
+# 中身はテキストなので、この項目だけ対象に加えています。
+文字数・行数を数える [+.bat +.cmd +.ps1]
  | @powershell
  | -NoProfile -NoExit -Command "'$n'; '行数 : ' + (Get-Content -LiteralPath '$p').Count; '文字数 : ' + (Get-Content -LiteralPath '$p' -Raw).Length"
 
@@ -299,7 +302,7 @@ SHA256 を書き出す
 #   ^:       行頭の : を名前付きフィールドにしない
 #   ^@       別名として解決しない @    例）^@('.png','.jpg')
 #   ^$       プレースホルダーにしない $
-#   ^-       拡張子欄で引き算にしない -
+#   ^+  ^-   拡張子欄で足し算・引き算にしない + -
 #   ^&       アクセスキーにしない &    例）Q^&A のかたち | @notepad
 #   ^#  ^[  ^]  ^^   それぞれの文字そのもの
 #

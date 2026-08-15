@@ -70,7 +70,7 @@ pub struct MenuItem {
     pub name: String,
     /// アクセスキーの位置（`name` のバイト位置。そこには必ず ASCII の英数字がある）
     pub accesskey: Option<usize>,
-    /// 対象の拡張子（継承・引き算・置換を解決済み。空ならすべて対象）
+    /// 対象の拡張子（継承・足し算・引き算・置換を解決済み。空ならすべて対象）
     pub extensions: Vec<String>,
     /// 起動する実行ファイル
     pub path: String,
@@ -1176,23 +1176,29 @@ fn split_ext_spec(text: &str) -> (&str, Option<&str>) {
 
 /// 拡張子の指定を解決する
 ///
-/// - すべて `-` 付き → 継承したものから引く
-/// - `-` なしが 1 つでもある → 継承を無視して置き換える
+/// - すべて符号（`+` / `-`）付き → 継承したものに足す／から引く
+/// - 符号なしが 1 つでもある → 継承を無視して置き換える
 /// - 混在 → エラー
+///
+/// `+` と `-` の扱いは向き以外まったく同じにしてある（検証・エスケープ・
+/// セクション見出しでの禁止・置換との混在の禁止）。同じ拡張子に両方を
+/// 書いた場合はどちらを勝たせるかを決めずにエラーにする。
 fn parse_extensions(
     spec: &str,
     inherited: &[String],
-    allow_subtract: bool,
+    allow_relative: bool,
     line: u32,
     diags: &mut Vec<Diag>,
 ) -> Vec<String> {
+    let mut replaced: Vec<String> = Vec::new();
     let mut added: Vec<String> = Vec::new();
     let mut removed: Vec<String> = Vec::new();
 
     for token in spec.split_whitespace() {
-        let (subtract, body) = match token.strip_prefix('-') {
-            Some(body) => (true, body),
-            None => (false, token),
+        let (sign, body) = match token.as_bytes().first() {
+            Some(b'+') => (Some('+'), &token[1..]),
+            Some(b'-') => (Some('-'), &token[1..]),
+            _ => (None, token),
         };
 
         let value = unescape(body).to_lowercase();
@@ -1208,42 +1214,72 @@ fn parse_extensions(
             continue;
         }
 
-        if subtract {
-            if !allow_subtract {
-                diags.push(Diag::error(
-                    line,
-                    format!("セクション見出しでは引き算（-）は使えません: -{}", value),
-                ));
-                continue;
-            }
-            removed.push(value);
-        } else {
-            added.push(value);
+        let Some(sign) = sign else {
+            push_unique(&mut replaced, value);
+            continue;
+        };
+
+        if !allow_relative {
+            diags.push(Diag::error(
+                line,
+                format!(
+                    "セクション見出しでは足し算・引き算（+ / -）は使えません: {}{}",
+                    sign, value
+                ),
+            ));
+            continue;
+        }
+
+        match sign {
+            '+' => push_unique(&mut added, value),
+            _ => push_unique(&mut removed, value),
         }
     }
 
-    if !added.is_empty() && !removed.is_empty() {
+    if !replaced.is_empty() && !(added.is_empty() && removed.is_empty()) {
         diags.push(Diag::error(
             line,
-            "拡張子の指定で - 付きと - なしが混在しています".to_string(),
+            "拡張子の指定で + / - 付きと符号なしが混在しています".to_string(),
         ));
         return inherited.to_vec();
     }
 
-    if !added.is_empty() {
-        added.dedup();
-        return added;
+    if !replaced.is_empty() {
+        return replaced;
     }
 
-    if !removed.is_empty() {
-        return inherited
-            .iter()
-            .filter(|ext| !removed.iter().any(|r| r == *ext))
-            .cloned()
-            .collect();
+    if added.is_empty() && removed.is_empty() {
+        return inherited.to_vec();
     }
 
-    inherited.to_vec()
+    if let Some(conflict) = added.iter().find(|ext| removed.contains(ext)) {
+        diags.push(Diag::error(
+            line,
+            format!(
+                "拡張子の指定で同じ拡張子に + と - の両方があります: {}",
+                conflict
+            ),
+        ));
+        return inherited.to_vec();
+    }
+
+    // 引いてから足す。両方に同じ拡張子は書けないので順序で結果は変わらない
+    let mut result: Vec<String> = inherited
+        .iter()
+        .filter(|ext| !removed.contains(ext))
+        .cloned()
+        .collect();
+    for ext in added {
+        push_unique(&mut result, ext);
+    }
+    result
+}
+
+/// まだ入っていなければ追加する
+fn push_unique(list: &mut Vec<String>, value: String) {
+    if !list.contains(&value) {
+        list.push(value);
+    }
 }
 
 /// 引数を空白区切りで分解する（引用符で空白を含められる）
@@ -1955,6 +1991,44 @@ mod tests {
     }
 
     #[test]
+    fn 拡張子を足し算できる() {
+        let config = parse_ok("[.jpg .png]\n変換 [+.svg] | C:\\a.exe");
+        assert_eq!(config.apps[0].extensions, vec![".jpg", ".png", ".svg"]);
+    }
+
+    #[test]
+    fn 足し算と引き算は同居できる() {
+        let config = parse_ok("[.jpg .png]\n変換 [+.svg -.jpg] | C:\\a.exe");
+        assert_eq!(config.apps[0].extensions, vec![".png", ".svg"]);
+    }
+
+    #[test]
+    fn 継承済みの拡張子を足しても重複しない() {
+        let config = parse_ok("[.jpg .png]\n変換 [+.jpg] | C:\\a.exe");
+        assert_eq!(config.apps[0].extensions, vec![".jpg", ".png"]);
+    }
+
+    #[test]
+    fn 足し算も小文字化される() {
+        let config = parse_ok("[.jpg]\n変換 [+.SVG] | C:\\a.exe");
+        assert_eq!(config.apps[0].extensions, vec![".jpg", ".svg"]);
+    }
+
+    #[test]
+    fn 子項目でも足し算できる() {
+        let config = parse_ok("[.jpg .png]\n変換 [-.png]\n> A [+.svg] | C:\\a.exe");
+        assert_eq!(config.apps[0].extensions, vec![".jpg"]);
+        assert_eq!(config.apps[0].submenu[0].extensions, vec![".jpg", ".svg"]);
+    }
+
+    #[test]
+    fn エスケープした足し算は拡張子の一部にならない() {
+        // `^+` は符号ではなく素の `+`。`.` で始まらないのでエラーになる
+        let errors = error_messages("[.jpg]\nX [^+.svg] | C:\\a.exe");
+        assert!(errors.iter().any(|m| m.contains("先頭の . がありません")));
+    }
+
+    #[test]
     fn 拡張子を完全置換できる() {
         let config = parse_ok("[.jpg .png]\n変換 [.svg] | C:\\a.exe");
         assert_eq!(config.apps[0].extensions, vec![".svg"]);
@@ -2113,9 +2187,27 @@ mod tests {
     }
 
     #[test]
+    fn 足し算と完全置換の混在はエラー() {
+        let errors = error_messages("[.jpg .png]\nX [+.svg .gif] | C:\\a.exe");
+        assert!(errors.iter().any(|m| m.contains("混在")));
+    }
+
+    #[test]
+    fn 同じ拡張子への足し算と引き算はエラー() {
+        let errors = error_messages("[.jpg .png]\nX [+.svg -.svg] | C:\\a.exe");
+        assert!(errors.iter().any(|m| m.contains("+ と - の両方")));
+    }
+
+    #[test]
     fn セクション見出しの引き算はエラー() {
         let errors = error_messages("[-.jpg]\nX | C:\\a.exe");
         assert!(errors.iter().any(|m| m.contains("引き算")));
+    }
+
+    #[test]
+    fn セクション見出しの足し算はエラー() {
+        let errors = error_messages("[+.jpg]\nX | C:\\a.exe");
+        assert!(errors.iter().any(|m| m.contains("足し算")));
     }
 
     #[test]
