@@ -78,6 +78,8 @@ pub struct MenuItem {
     pub args: Vec<String>,
     /// 作業フォルダ（空ならパスの親フォルダ）
     pub working_dir: String,
+    /// メニューに出すアイコン（`:icon`）
+    pub icon: Option<IconSpec>,
     /// 実行前に確認する（`:confirm`）
     ///
     /// `None` は確認なし。`Some` の中身は添えるメッセージで、`:confirm` に値を
@@ -115,6 +117,57 @@ impl MenuItem {
     }
 }
 
+/// アイコンの指定（`:icon`）
+///
+/// `パス` または `パス,番号`。番号は dll や exe に複数のアイコンが入っている
+/// ときに選ぶためのもの（`.reg` やショートカットと同じ書き方）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IconSpec {
+    pub path: String,
+    pub index: i32,
+}
+
+/// `パス` または `パス,番号` を読む
+///
+/// **最後のコンマの後ろが整数のときだけ**番号と見なす。`C:\dir,1\a.ico` の
+/// ようにパスの途中にコンマがあっても取り違えない。
+pub fn parse_icon(value: &str) -> IconSpec {
+    if let Some((path, index)) = value.rsplit_once(',') {
+        let path = path.trim();
+        if !path.is_empty() {
+            if let Ok(index) = index.trim().parse::<i32>() {
+                return IconSpec {
+                    path: path.to_string(),
+                    index,
+                };
+            }
+        }
+    }
+
+    IconSpec {
+        path: value.trim().to_string(),
+        index: 0,
+    }
+}
+
+/// アイコンを出すかどうか（`[extrun]` の `icons`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IconMode {
+    /// 出さない（`:icon` を書いていても）
+    None,
+    /// `:icon` を書いた項目だけ出す（既定）
+    ///
+    /// 既定をこれにしておくと、`:icon` を 1 つも書いていない設定では
+    /// アイコンの読み込みが一切走らず、これまでと同じ起動時間になる。
+    /// それでいて `:icon` を書いた瞬間に効く。
+    #[default]
+    Specified,
+    /// `:icon` を優先し、書いていない項目は実行ファイルから取り出す
+    ///
+    /// 取り出しにかかる時間が読めないので、こちらは明示的に選ばせる。
+    Auto,
+}
+
 /// メニューを表示する位置
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MenuPosition {
@@ -138,6 +191,8 @@ pub struct Settings {
     pub menu_position: MenuPosition,
     /// 先頭項目を選択した状態でメニューを開くか
     pub select_first: bool,
+    /// アイコンを出すかどうか
+    pub icons: IconMode,
 }
 
 /// 設定ファイルの内容
@@ -551,6 +606,8 @@ struct ItemLine {
     working_dir: Option<(u32, String)>,
     /// `:confirm`（値は省略できるので空文字列になりうる）
     confirm: Option<(u32, String)>,
+    /// `:icon`
+    icon: Option<(u32, String)>,
 }
 
 /// 行の種類
@@ -621,7 +678,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
         // 名前付きフィールド
         if let Some(rest) = trimmed.strip_prefix(':') {
             let (keyword, value) = split_keyword(rest);
-            if !matches!(keyword, "dir" | "confirm") {
+            if !matches!(keyword, "dir" | "confirm" | "icon") {
                 diags.push(Diag::error(
                     line,
                     format!(": の後に未知のキーワードがあります: {}", keyword),
@@ -633,7 +690,8 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
                 Some(Stmt::Item(item)) => {
                     let field = match keyword {
                         "dir" => &mut item.working_dir,
-                        _ => &mut item.confirm,
+                        "confirm" => &mut item.confirm,
+                        _ => &mut item.icon,
                     };
                     *field = Some((line, value.to_string()));
                 }
@@ -669,6 +727,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
             text: trimmed.to_string(),
             working_dir: None,
             confirm: None,
+            icon: None,
         }));
     }
 
@@ -730,6 +789,23 @@ pub fn parse_menu_position(value: &str) -> Option<MenuPosition> {
     })
 }
 
+/// `icons` の値を解釈する
+pub fn parse_icon_mode(value: &str) -> Option<IconMode> {
+    let value = value.trim();
+
+    for (keyword, mode) in [
+        ("none", IconMode::None),
+        ("specified", IconMode::Specified),
+        ("auto", IconMode::Auto),
+    ] {
+        if value.eq_ignore_ascii_case(keyword) {
+            return Some(mode);
+        }
+    }
+
+    None
+}
+
 /// `yes` / `no` を解釈する
 pub fn parse_yes_no(value: &str) -> Option<bool> {
     let value = value.trim();
@@ -754,6 +830,7 @@ fn parse_setting(
     for (keyword, present) in [
         ("dir", item.working_dir.is_some()),
         ("confirm", item.confirm.is_some()),
+        ("icon", item.icon.is_some()),
     ] {
         if present {
             diags.push(Diag::error(
@@ -798,6 +875,13 @@ fn parse_setting(
             None => diags.push(Diag::error(
                 line,
                 format!("select-first の値が不正です（yes / no）: {}", value),
+            )),
+        },
+        "icons" => match parse_icon_mode(value) {
+            Some(mode) => settings.icons = mode,
+            None => diags.push(Diag::error(
+                line,
+                format!("icons の値が不正です（none / specified / auto）: {}", value),
             )),
         },
         _ => {
@@ -970,6 +1054,20 @@ fn build_item(
         aliases.expand(value, *confirm_line, diags)
     });
 
+    // アイコンはパスなので、実行ファイルと同じくここでエスケープまで解決する
+    let icon = source.icon.as_ref().and_then(|(icon_line, value)| {
+        warn_stray_caret(value, *icon_line, diags);
+        let resolved = unescape(&aliases.expand(value, *icon_line, diags));
+        if resolved.trim().is_empty() {
+            diags.push(Diag::error(
+                *icon_line,
+                ":icon にパスがありません（例: :icon C:\\Windows\\explorer.exe,0）".to_string(),
+            ));
+            return None;
+        }
+        Some(parse_icon(&resolved))
+    });
+
     // 日時と入力欄の書式はここで検証する。書き間違えると誤った文字列が黙って
     // ファイル名に入るので、警告ではなくエラーにしてメニューを止める
     for text in args
@@ -992,6 +1090,7 @@ fn build_item(
         args,
         working_dir,
         confirm,
+        icon,
         all_mode,
         submenu: Vec::new(),
         separator,
@@ -1148,6 +1247,125 @@ fn parse_extensions(
 }
 
 /// 引数を空白区切りで分解する（引用符で空白を含められる）
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+
+    fn item_of(text: &str) -> MenuItem {
+        let parsed = parse(text);
+        let errors: Vec<&str> = parsed.errors().map(|d| d.message.as_str()).collect();
+        assert!(errors.is_empty(), "予期しないエラー: {:?}", errors);
+        parsed.config.apps.into_iter().next().expect("項目がある")
+    }
+
+    #[test]
+    fn 既定はアイコンなし() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe");
+        assert_eq!(item.icon, None);
+        assert_eq!(Settings::default().icons, IconMode::Specified);
+    }
+
+    #[test]
+    fn アイコンのパスを読める() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :icon C:\\a\\b.ico");
+        assert_eq!(
+            item.icon,
+            Some(IconSpec {
+                path: "C:\\a\\b.ico".to_string(),
+                index: 0
+            })
+        );
+    }
+
+    #[test]
+    fn 番号付きのアイコンを読める() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :icon C:\\a\\shell32.dll,54");
+        assert_eq!(
+            item.icon,
+            Some(IconSpec {
+                path: "C:\\a\\shell32.dll".to_string(),
+                index: 54
+            })
+        );
+        // 負の番号はリソース ID の指定として意味がある
+        assert_eq!(parse_icon("C:\\a.dll,-3").index, -3);
+    }
+
+    /// 最後のコンマの後ろが整数でなければ、すべてパスとして扱う
+    #[test]
+    fn パスに含まれるコンマと取り違えない() {
+        assert_eq!(
+            parse_icon("C:\\dir,1\\a.ico"),
+            IconSpec {
+                path: "C:\\dir,1\\a.ico".to_string(),
+                index: 0
+            }
+        );
+        assert_eq!(parse_icon("C:\\a,b.ico").path, "C:\\a,b.ico");
+    }
+
+    #[test]
+    fn アイコンでも別名が展開される() {
+        let item =
+            item_of("@ico = C:\\icons\n[.txt]\nA | C:\\Windows\\notepad.exe\n :icon @ico\\a.ico");
+        assert_eq!(item.icon.expect("ある").path, "C:\\icons\\a.ico");
+    }
+
+    #[test]
+    fn パスのないアイコンはエラー() {
+        let messages: Vec<String> = parse("[.txt]\nA | C:\\a.exe\n :icon")
+            .errors()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains(":icon にパスがありません")),
+            "{:?}",
+            messages
+        );
+    }
+
+    #[test]
+    fn アイコンの出し方を設定できる() {
+        for (value, expected) in [
+            ("none", IconMode::None),
+            ("specified", IconMode::Specified),
+            ("auto", IconMode::Auto),
+            ("AUTO", IconMode::Auto),
+        ] {
+            let config = parse(&format!("[extrun]\nicons = {}", value)).config;
+            assert_eq!(config.settings.icons, expected, "{}", value);
+        }
+    }
+
+    #[test]
+    fn 不正なアイコンの設定はエラー() {
+        let messages: Vec<String> = parse("[extrun]\nicons = すべて")
+            .errors()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains("icons の値が不正です")),
+            "{:?}",
+            messages
+        );
+    }
+
+    #[test]
+    fn 設定セクションの中では使えない() {
+        let messages: Vec<String> = parse("[extrun]\nicons = auto\n :icon C:\\a.ico")
+            .errors()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains(":icon を使えません")),
+            "{:?}",
+            messages
+        );
+    }
+}
+
 #[cfg(test)]
 mod split_args_tests {
     use super::*;

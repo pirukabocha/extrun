@@ -84,6 +84,9 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
     warn_duplicate_accesskeys(items, diags);
 
     for item in items {
+        // アイコンはサブメニューの親にも付くので、実行の可否より先に見る
+        warn_missing_icon(item, diags);
+
         if item.has_submenu() {
             warn_unreachable_confirm(item, "サブメニューの親", diags);
             collect_item_diags(&item.submenu, diags);
@@ -112,6 +115,44 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
         }
 
         warn_embedded_path_placeholder(item, diags);
+    }
+}
+
+/// `:icon` から実際にアイコンを取り出せるか調べる
+///
+/// ファイルの有無だけでなく**取り出しまで試す**。番号が範囲の外だと、パスは
+/// 正しいのにアイコンだけ出ないという分かりにくい結果になるため。
+///
+/// 出なくてもメニューそのものは表示されるので、警告にとどめる。相対パスは
+/// 実行時のカレントに依存するので、実行ファイルと同じく確認しない。
+fn warn_missing_icon(item: &MenuItem, diags: &mut Vec<Diag>) {
+    let Some(spec) = &item.icon else {
+        return;
+    };
+
+    let path = Path::new(&spec.path);
+    if !path.is_absolute() {
+        return;
+    }
+
+    if !path.exists() {
+        diags.push(Diag::warning(
+            item.line,
+            format!("アイコンのファイルが見つかりません: {}", spec.path),
+        ));
+        return;
+    }
+
+    // 大きさは何でもよい（取り出せるかどうかだけを見る）
+    match crate::icon::load(path, spec.index, 16) {
+        Some(bitmap) => crate::icon::dispose(bitmap),
+        None => diags.push(Diag::warning(
+            item.line,
+            format!(
+                "アイコンを取り出せません（番号を確認してください）: {},{}",
+                spec.path, spec.index
+            ),
+        )),
     }
 }
 

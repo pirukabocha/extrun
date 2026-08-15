@@ -2,7 +2,7 @@
 メニューの作成と表示 (Win32 API版)
 */
 
-use crate::config::{Config, MenuItem, MenuPosition};
+use crate::config::{Config, IconMode, MenuItem, MenuPosition};
 use crate::placeholder::{PathPlaceholders, RunContext};
 use crate::Target;
 use std::collections::{HashMap, HashSet};
@@ -15,20 +15,24 @@ use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    MONITOR_DEFAULTTOPRIMARY,
+    GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HBITMAP, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_DOWN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 /// メニューアクション
+///
+/// `MenuItem` を箱に入れているのは、`Close` との大きさの差を詰めるため。
+/// 項目の数だけ確保が増えるが、いずれにせよ複製しているので誤差の範囲。
 #[derive(Clone)]
 enum MenuAction {
     ExecuteApp {
-        item: MenuItem,
+        item: Box<MenuItem>,
         targets: Arc<Vec<Target>>,
     },
     Close,
@@ -120,20 +124,30 @@ pub fn create_and_show_menu(config: &Config, targets: &[Target]) {
         return;
     }
 
+    // メニューを出す位置を決める
+    //
+    // アイコンの大きさは出す先のモニタの DPI で決まるので、項目を作るより先に
+    // 位置を確定させておく
+    let (point, align) = menu_anchor(config.settings.menu_position, owner);
+
     // ポップアップメニューを作成
     let hmenu = unsafe { CreatePopupMenu() };
 
     // アプリケーションメニューを追加
-    add_menu_items(hmenu, &filtered_apps, Arc::clone(&shared_targets), &state);
+    let mut icons = IconCache::new(config.settings.icons, point);
+    add_menu_items(
+        hmenu,
+        &filtered_apps,
+        Arc::clone(&shared_targets),
+        &state,
+        &mut icons,
+    );
 
     // 閉じるメニューを追加
     append_separator(hmenu);
     let close_id = state.lock().unwrap().add_action(MenuAction::Close);
     // Esc でも閉じられるので、アクセスキーは予約しない
     append_menu_item(hmenu, close_id, "閉じる", None);
-
-    // メニューを出す位置を決める
-    let (point, align) = menu_anchor(config.settings.menu_position, owner);
 
     // ウィンドウをフォアグラウンドに設定（メニュー表示のため必要）
     unsafe { SetForegroundWindow(hwnd) };
@@ -162,8 +176,9 @@ pub fn create_and_show_menu(config: &Config, targets: &[Target]) {
         )
     };
 
-    // メニューを破棄
+    // メニューを破棄（アイコンはメニューが手放してから解放する）
     unsafe { DestroyMenu(hmenu) };
+    icons.dispose();
 
     // コマンドを実行
     if cmd != 0 {
@@ -267,22 +282,130 @@ fn add_menu_items(
     items: &[MenuItem],
     targets: Arc<Vec<Target>>,
     state: &Arc<Mutex<GlobalState>>,
+    icons: &mut IconCache,
 ) {
-    for item in items {
+    // 追加した順にそのまま並ぶので、繰り返しの番号がそのまま位置になる。
+    // アイコンは位置で指定する（サブメニューの親には ID が無いため）
+    for (position, item) in items.iter().enumerate() {
         if item.is_separator() {
             append_separator(hmenu);
-        } else if item.has_submenu() {
+            continue;
+        }
+
+        if item.has_submenu() {
             let submenu = unsafe { CreatePopupMenu() };
-            add_menu_items(submenu, &item.submenu, Arc::clone(&targets), state);
+            add_menu_items(submenu, &item.submenu, Arc::clone(&targets), state, icons);
             append_submenu(hmenu, submenu, &item.name, item.accesskey);
         } else {
             let id = state.lock().unwrap().add_action(MenuAction::ExecuteApp {
-                item: item.clone(),
+                item: Box::new(item.clone()),
                 targets: Arc::clone(&targets),
             });
             append_menu_item(hmenu, id, &item.name, item.accesskey);
         }
+
+        if let Some(bitmap) = icons.bitmap_for(item) {
+            set_item_bitmap(hmenu, position as u32, bitmap);
+        }
     }
+}
+
+/// 項目にアイコンを付ける
+///
+/// `MF_OWNERDRAW` は要らない。32 ビットのビットマップを渡せば、Vista 以降の
+/// メニューがアルファ込みで描いてくれる。
+fn set_item_bitmap(hmenu: HMENU, position: u32, bitmap: HBITMAP) {
+    let mut info: MENUITEMINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+    info.fMask = MIIM_BITMAP;
+    info.hbmpItem = bitmap;
+
+    unsafe { SetMenuItemInfoW(hmenu, position, 1, &info) };
+}
+
+/// アイコンの読み込みと使い回し
+///
+/// 設定ファイルは同じ実行ファイルを何度も指す（同梱サンプルでは 1 つの拡張子に
+/// 25 項目並ぶが、実行ファイルは数種類しかない）。パスと番号で覚えておけば、
+/// 実際に取り出すのは数回で済む。
+struct IconCache {
+    mode: IconMode,
+    /// アイコンの一辺（物理ピクセル）
+    size: i32,
+    loaded: Vec<(String, i32, Option<HBITMAP>)>,
+}
+
+impl IconCache {
+    fn new(mode: IconMode, point: POINT) -> Self {
+        IconCache {
+            mode,
+            size: if mode == IconMode::None {
+                0
+            } else {
+                icon_size(point)
+            },
+            loaded: Vec::new(),
+        }
+    }
+
+    /// 項目に付けるアイコン
+    fn bitmap_for(&mut self, item: &MenuItem) -> Option<HBITMAP> {
+        if self.mode == IconMode::None {
+            return None;
+        }
+
+        match &item.icon {
+            Some(spec) => self.load(&spec.path, spec.index),
+            // 指定が無い項目を実行ファイルから補うのは auto のときだけ
+            None if self.mode == IconMode::Auto && !item.path.is_empty() => {
+                self.load(&item.path, 0)
+            }
+            None => None,
+        }
+    }
+
+    /// 同じパスと番号なら 1 度しか読み込まない（読めなかったことも覚える）
+    fn load(&mut self, path: &str, index: i32) -> Option<HBITMAP> {
+        if let Some((_, _, bitmap)) = self
+            .loaded
+            .iter()
+            .find(|(cached, cached_index, _)| cached == path && *cached_index == index)
+        {
+            return *bitmap;
+        }
+
+        let bitmap = crate::icon::load(Path::new(path), index, self.size);
+        self.loaded.push((path.to_string(), index, bitmap));
+        bitmap
+    }
+
+    /// 読み込んだビットマップを解放する（メニューを壊したあとに呼ぶ）
+    fn dispose(&mut self) {
+        for (_, _, bitmap) in self.loaded.drain(..) {
+            if let Some(bitmap) = bitmap {
+                crate::icon::dispose(bitmap);
+            }
+        }
+    }
+}
+
+/// メニューに載せるアイコンの一辺（物理ピクセル）
+///
+/// Per-Monitor V2 ではメニューの文字も枠も自動で拡大されるが、**こちらが渡した
+/// ビットマップは拡大されない**。出す先のモニタの DPI を見て自分で決める。
+fn icon_size(point: POINT) -> i32 {
+    let mut dpi = 96;
+
+    let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
+    if !monitor.is_null() {
+        let mut dpi_x = 0;
+        let mut dpi_y = 0;
+        if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) } == 0 {
+            dpi = dpi_x;
+        }
+    }
+
+    unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) }
 }
 
 /// メニュー項目を追加（ヘルパー関数）
@@ -955,6 +1078,112 @@ mod tests {
         // 引数欄を空にした項目は引数なし、:dir はプレースホルダーを保ったまま
         assert!(open.submenu[3].args.is_empty());
         assert_eq!(open.submenu[3].working_dir, "$p");
+    }
+
+    // -----------------------------------------------------------------
+    // アイコン
+    //
+    // 見た目は自動では確かめられないが、「ビットマップが項目に付いたか」は
+    // メニューから読み戻せる。3 つのモードの違いはここで押さえられる
+    // -----------------------------------------------------------------
+
+    /// 位置で指定した項目に付いているビットマップ
+    fn bitmap_at(hmenu: HMENU, position: u32) -> Option<HBITMAP> {
+        let mut info: MENUITEMINFOW = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+        info.fMask = MIIM_BITMAP;
+
+        let read = unsafe { GetMenuItemInfoW(hmenu, position, 1, &mut info) };
+        if read == 0 || info.hbmpItem.is_null() {
+            None
+        } else {
+            Some(info.hbmpItem)
+        }
+    }
+
+    /// 設定を組み立てて、各項目にビットマップが付いたかを返す
+    fn icons_of(text: &str, mode: IconMode) -> Vec<bool> {
+        let parsed = crate::config::parse(text);
+        assert!(!parsed.has_error(), "設定にエラーがある");
+
+        let targets = vec![target(".txt")];
+        let items = filter_menu_items(&parsed.config.apps, &targets);
+        let state = Arc::new(Mutex::new(GlobalState::new()));
+        let hmenu = unsafe { CreatePopupMenu() };
+        let mut icons = IconCache::new(mode, POINT { x: 0, y: 0 });
+
+        add_menu_items(hmenu, &items, Arc::new(targets), &state, &mut icons);
+
+        let found = (0..items.len())
+            .map(|position| bitmap_at(hmenu, position as u32).is_some())
+            .collect();
+
+        unsafe { DestroyMenu(hmenu) };
+        icons.dispose();
+        found
+    }
+
+    /// `:icon` を書いた項目・書いていない項目・アイコンの無いファイル
+    const ICON_CONFIG: &str = "[.txt]\n\
+        指定あり | C:\\Windows\\notepad.exe\n :icon C:\\Windows\\System32\\imageres.dll,3\n\
+        指定なし | C:\\Windows\\explorer.exe\n";
+
+    /// 既定。`:icon` を書いた項目だけに付く
+    #[test]
+    fn specified_は指定した項目だけにアイコンが付く() {
+        assert_eq!(
+            icons_of(ICON_CONFIG, IconMode::Specified),
+            vec![true, false]
+        );
+    }
+
+    /// 書いてあっても出さない（設定を消さずに一時的に止められる）
+    #[test]
+    fn none_はどの項目にもアイコンが付かない() {
+        assert_eq!(icons_of(ICON_CONFIG, IconMode::None), vec![false, false]);
+    }
+
+    /// 指定が無い項目は実行ファイルから補う
+    #[test]
+    fn auto_は実行ファイルからも取り出す() {
+        assert_eq!(icons_of(ICON_CONFIG, IconMode::Auto), vec![true, true]);
+    }
+
+    /// サブメニューの親にも付く（:confirm と違って意味がある）
+    #[test]
+    fn サブメニューの親にもアイコンが付く() {
+        let text = "[.txt]\n親\n :icon C:\\Windows\\System32\\imageres.dll,3\n\
+                    > 子 | C:\\Windows\\notepad.exe\n";
+        assert_eq!(icons_of(text, IconMode::Specified), vec![true]);
+    }
+
+    /// 同じパスと番号を何度書いても、取り出しは 1 回で済む
+    #[test]
+    fn 同じアイコンは使い回される() {
+        let mut icons = IconCache::new(IconMode::Specified, POINT { x: 0, y: 0 });
+        let path = "C:\\Windows\\System32\\imageres.dll";
+
+        let first = icons.load(path, 3);
+        let second = icons.load(path, 3);
+        assert!(first.is_some());
+        assert_eq!(first, second, "同じビットマップが返る");
+        assert_eq!(icons.loaded.len(), 1, "覚えているのは 1 件だけ");
+
+        // 番号が違えば別のアイコン
+        icons.load(path, 4);
+        assert_eq!(icons.loaded.len(), 2);
+
+        icons.dispose();
+    }
+
+    /// 読めなかったことも覚えるので、無いファイルを何度も叩かない
+    #[test]
+    fn 読めないアイコンも覚える() {
+        let mut icons = IconCache::new(IconMode::Specified, POINT { x: 0, y: 0 });
+        assert!(icons.load("C:\\無い\\無い.dll", 0).is_none());
+        assert!(icons.load("C:\\無い\\無い.dll", 0).is_none());
+        assert_eq!(icons.loaded.len(), 1);
+        icons.dispose();
     }
 
     #[test]
