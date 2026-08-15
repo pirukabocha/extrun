@@ -503,6 +503,95 @@ fn execute_action(action: MenuAction) {
     }
 }
 
+/// 起動 1 回ぶんの内容
+///
+/// 実行と `--preview` の両方がここを通る。表示しているものと実際に起動される
+/// ものがずれてはいけないので、組み立ては `resolve_invocations` の 1 か所に集める。
+pub struct Invocation {
+    /// 起動する実行ファイル
+    pub program: PathBuf,
+    /// 置換を解決済みの引数
+    pub args: Vec<String>,
+    /// 作業フォルダ（解決済み。未指定だった場合は実行ファイルの親）
+    pub working_dir: String,
+}
+
+/// 項目と対象から、起動されるプロセスを組み立てる
+///
+/// `+`（まとめて渡す）なら 1 つ、そうでなければ `targets` と同じ順・同じ個数を返す。
+pub fn resolve_invocations(item: &MenuItem, targets: &[Target]) -> Vec<Invocation> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let exe_path = PathBuf::from(&item.path);
+    let working_dir = resolve_working_dir(item, &exe_path, targets);
+
+    if item.all_mode {
+        return vec![Invocation {
+            args: all_mode_args(&item.args, targets),
+            program: exe_path,
+            working_dir,
+        }];
+    }
+
+    targets
+        .iter()
+        .map(|target| Invocation {
+            program: exe_path.clone(),
+            args: PathPlaceholders::from_path(&target.path).replace_args(&item.args),
+            working_dir: working_dir.clone(),
+        })
+        .collect()
+}
+
+/// 作業フォルダを解決する
+///
+/// プレースホルダーは最初の対象を基準にする。未指定なら実行ファイルの親ディレクトリ。
+fn resolve_working_dir(item: &MenuItem, exe_path: &Path, targets: &[Target]) -> String {
+    if item.working_dir.is_empty() {
+        return exe_path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string());
+    }
+
+    PathPlaceholders::from_path(&targets[0].path).replace(&item.working_dir)
+}
+
+/// `+`（まとめて渡す）の引数を組み立てる
+///
+/// 引数がちょうど `$p` のところに全パスを展開する。`$p` がどこにも無ければ末尾に足す。
+fn all_mode_args(base_args: &[String], targets: &[Target]) -> Vec<String> {
+    let placeholder_count = base_args.iter().filter(|arg| arg.as_str() == "$p").count();
+    let has_path_placeholder = base_args.iter().any(|arg| arg.contains("$p"));
+    let extra_path_args = if has_path_placeholder {
+        placeholder_count.saturating_mul(targets.len().saturating_sub(1))
+    } else {
+        targets.len()
+    };
+    let mut final_args = Vec::with_capacity(base_args.len() + extra_path_args);
+
+    let placeholders = PathPlaceholders::from_path(&targets[0].path);
+    for arg in base_args {
+        if arg == "$p" {
+            for target in targets {
+                final_args.push(target.path.to_string_lossy().to_string());
+            }
+        } else {
+            final_args.push(placeholders.replace(arg));
+        }
+    }
+
+    if !has_path_placeholder {
+        for target in targets {
+            final_args.push(target.path.to_string_lossy().to_string());
+        }
+    }
+
+    final_args
+}
+
 /// コマンドを実行
 fn execute_command(item: &MenuItem, targets: &[Target]) {
     if targets.is_empty() {
@@ -518,23 +607,19 @@ fn execute_command(item: &MenuItem, targets: &[Target]) {
         return;
     }
 
-    // working_dir の処理
-    let working_dir = if !item.working_dir.is_empty() {
-        let placeholders = PathPlaceholders::from_path(&targets[0].path);
-        placeholders.replace(&item.working_dir)
-    } else {
-        exe_path
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| ".".to_string())
-    };
-
-    // コマンドを実行
-    if item.all_mode {
-        execute_all_mode(&exe_path, &item.args, targets, &working_dir);
-    } else {
-        execute_multi_mode(&exe_path, &item.args, targets, &working_dir);
+    // 個別実行では対象の数だけ同じ失敗が並ぶので、集めてから 1 枚だけ出す
+    let mut reasons: Vec<String> = Vec::new();
+    for invocation in resolve_invocations(item, targets) {
+        if let Err(reason) = spawn_command(
+            &invocation.program,
+            &invocation.args,
+            &invocation.working_dir,
+        ) {
+            reasons.push(reason);
+        }
     }
+
+    show_spawn_error(&exe_path, &reasons);
 }
 
 /// プロセスを起動する（失敗したら理由を返す）
@@ -578,60 +663,6 @@ fn show_spawn_error(exe_path: &Path, reasons: &[String]) {
     }
 
     show_error_dialog("エラー", &message);
-}
-
-/// 全てのパスをまとめて1つのプロセスで実行
-fn execute_all_mode(exe_path: &Path, base_args: &[String], targets: &[Target], working_dir: &str) {
-    let placeholder_count = base_args.iter().filter(|arg| arg.as_str() == "$p").count();
-    let has_path_placeholder = base_args.iter().any(|arg| arg.contains("$p"));
-    let extra_path_args = if has_path_placeholder {
-        placeholder_count.saturating_mul(targets.len().saturating_sub(1))
-    } else {
-        targets.len()
-    };
-    let mut final_args = Vec::with_capacity(base_args.len() + extra_path_args);
-    let first_path = &targets[0].path;
-
-    let placeholders = PathPlaceholders::from_path(first_path);
-    for arg in base_args {
-        if arg == "$p" {
-            for target in targets {
-                final_args.push(target.path.to_string_lossy().to_string());
-            }
-        } else {
-            final_args.push(placeholders.replace(arg));
-        }
-    }
-
-    if !has_path_placeholder {
-        for target in targets {
-            final_args.push(target.path.to_string_lossy().to_string());
-        }
-    }
-
-    if let Err(reason) = spawn_command(exe_path, &final_args, working_dir) {
-        show_spawn_error(exe_path, &[reason]);
-    }
-}
-
-/// それぞれのパスを個別のプロセスで並列実行
-fn execute_multi_mode(
-    exe_path: &Path,
-    base_args: &[String],
-    targets: &[Target],
-    working_dir: &str,
-) {
-    let mut reasons: Vec<String> = Vec::new();
-
-    for target in targets {
-        let placeholders = PathPlaceholders::from_path(&target.path);
-        let args = placeholders.replace_args(base_args);
-        if let Err(reason) = spawn_command(exe_path, &args, working_dir) {
-            reasons.push(reason);
-        }
-    }
-
-    show_spawn_error(exe_path, &reasons);
 }
 
 /// エラーダイアログを表示

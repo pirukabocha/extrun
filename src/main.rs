@@ -10,6 +10,7 @@ mod config;
 mod console;
 mod menu;
 mod placeholder;
+mod preview;
 
 use config::{Config, MenuPosition};
 use std::env;
@@ -28,6 +29,10 @@ const USAGE: &str = "\
   extrun.exe --check             設定ファイルを検証する（エラーがあれば終了コード 1）
   extrun.exe --version           バージョンを表示する
   extrun.exe --help              このヘルプを表示する
+
+  extrun.exe --preview <パス> [パス ...]
+                     メニューに出る項目と、実際に起動されるコマンドラインを
+                     起動せずに表示する
 
 オプション（設定ファイルの [extrun] より優先されます）:
   --at <位置>        メニューを表示する位置
@@ -203,46 +208,45 @@ fn main() {
         return;
     }
 
+    // --preview は対象のパスが要るので、--check のようにここでは処理しきれない。
+    // 印だけ取って残りは通常どおり進め、対象が揃ったところで分岐する。
+    let preview = args.iter().any(|arg| arg == "--preview");
+    let args: Vec<String> = args.into_iter().filter(|arg| arg != "--preview").collect();
+
     // 設定ファイルへの上書きを取り出し、残りをパスとして扱う
     let (overrides, args) = match take_options(args) {
         Ok(result) => result,
         Err(message) => {
-            show_error_dialog("ExtRun", &format!("{}\n\n{}", message, USAGE));
+            report_usage_error(preview, &format!("{}\n\n{}", message, USAGE));
             std::process::exit(1);
         }
     };
 
     if args.is_empty() {
-        show_error_dialog(
-            "ExtRun",
+        report_usage_error(
+            preview,
             &format!("ファイルパスが指定されていません。\n\n{}", USAGE),
         );
         std::process::exit(1);
     }
 
     // ターゲットの設定（存在しないパスは対象にできないので落とす）
-    let mut targets: Vec<Target> = Vec::with_capacity(args.len());
-    let mut missing: Vec<&str> = Vec::new();
-
-    for arg in &args {
-        let path = PathBuf::from(arg);
-        if path.exists() {
-            targets.push(Target::from_path(to_absolute_path(&path)));
-        } else {
-            missing.push(arg);
-        }
-    }
+    let (targets, missing) = build_targets(&args);
 
     // 1 つでも開けるものがあればメニューを出す。全部だめなときだけ理由を見せる
     if targets.is_empty() {
-        show_error_dialog(
-            "ExtRun",
+        report_usage_error(
+            preview,
             &format!(
                 "指定されたパスが見つかりません:\n{}",
                 format_missing(&missing)
             ),
         );
         std::process::exit(1);
+    }
+
+    if preview {
+        std::process::exit(preview::run(&config_path, &targets));
     }
 
     // 設定ファイルの読み込み
@@ -264,6 +268,35 @@ fn main() {
 
     // メニューを作成して表示
     menu::create_and_show_menu(&parsed.config, &targets);
+}
+
+/// 引数のパスから対象を作る（存在しないものは第 2 の戻り値に分ける）
+fn build_targets(args: &[String]) -> (Vec<Target>, Vec<&str>) {
+    let mut targets: Vec<Target> = Vec::with_capacity(args.len());
+    let mut missing: Vec<&str> = Vec::new();
+
+    for arg in args {
+        let path = PathBuf::from(arg);
+        if path.exists() {
+            targets.push(Target::from_path(to_absolute_path(&path)));
+        } else {
+            missing.push(arg);
+        }
+    }
+
+    (targets, missing)
+}
+
+/// 呼び出し方の誤りを伝える
+///
+/// `--preview` はコンソールで使うものなので、ダイアログを出されると
+/// リダイレクトしていた場合に何も残らない。出力先を揃える。
+fn report_usage_error(preview: bool, message: &str) {
+    if preview {
+        console::print(&format!("{}\r\n", message.replace('\n', "\r\n")));
+    } else {
+        show_error_dialog("ExtRun", message);
+    }
 }
 
 /// 見つからなかったパスをダイアログ用の文字列に整形

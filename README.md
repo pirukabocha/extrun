@@ -57,6 +57,9 @@ extrun.exe C:\Projects\MyProject
 # 設定ファイルを検証する
 extrun.exe --check
 
+# 実際に起動されるコマンドラインを、起動せずに表示する
+extrun.exe --preview image.jpg
+
 # バージョン / ヘルプ
 extrun.exe --version
 extrun.exe --help
@@ -273,6 +276,30 @@ extrun.exe --check
 if errorlevel 1 exit /b 1
 ```
 
+### 実行される内容の確認
+
+```powershell
+extrun.exe --preview "C:\photo\a.jpg"
+```
+
+`--check` が**書式**を見るのに対して、`--preview` は**そのパスに対して実際に何が起動されるか**を、起動せずに表示します。プレースホルダーとエスケープが意図どおりに解決されているかを、プロセスを走らせずに確かめられます。
+
+```
+対象:
+  C:\photo\a.jpg  (.jpg)
+
+形式を変換 (C) > PNG に変換
+  実行ファイル  C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+  引数　　　　  -NoProfile
+  引数　　　　  -Command
+  引数　　　　  Add-Type -AssemblyName System.Drawing; ...
+  作業フォルダ  C:\Windows\System32\WindowsPowerShell\v1.0  （:dir 未指定のため実行ファイルの場所）
+
+15 項目
+```
+
+引数は 1 つ 1 行なので、`"..."` で囲み忘れて空白で割れてしまった引数をここで見つけられます。複数のパスを渡すと、個別実行の項目は `[1/2]` のように対象の数だけ並び、`+`（まとめて渡す）の項目は 1 回の起動に全パスが並びます。
+
 ## 技術仕様
 
 ### 依存クレート
@@ -298,7 +325,7 @@ if errorlevel 1 exit /b 1
 - `AppendMenuW`: メニュー項目追加
 - `TrackPopupMenu`: メニュー表示とユーザー選択
 - `MessageBoxW`: エラーダイアログ表示
-- `AttachConsole` / `WriteConsoleW`: `--check` の結果出力
+- `AttachConsole` / `WriteConsoleW`: `--check` / `--preview` の結果出力
 
 ## トラブルシューティング
 
@@ -399,6 +426,7 @@ extrun/
 │   ├── main.rs         # エントリポイント、引数処理
 │   ├── config.rs       # 設定ファイルのパース
 │   ├── check.rs        # --check の検証と整形
+│   ├── preview.rs      # --preview の整形
 │   ├── console.rs      # コンソールへの出力
 │   ├── menu.rs         # Win32メニュー作成・表示・実行
 │   └── placeholder.rs  # プレースホルダー置換
