@@ -1,7 +1,7 @@
 /*!
 設定ファイル（extrun-config.txt）の読み込みとパース
 
-書式の仕様は extrun-config-format.md を参照。
+書式の仕様は docs/extrun-config-format.md を参照。
 */
 
 use std::fs;

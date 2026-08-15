@@ -14,8 +14,8 @@
         extrun.exe
         readme.txt                 packaging\readme.txt（配布専用。README.md とは別物）
         extrun-config.sample.txt   extrun-config.txt をリネームしたもの
-        extrun-config-format.md
-        extrun-recipes.md          外部アプリを使った設定例集
+        extrun-config-format.md    docs\ から。zip の中ではフラットに並べる
+        extrun-recipes.md          同じく docs\ から。外部アプリを使った設定例集
         CHANGELOG.md               更新内容（利用者向けの区分で書く。内部の変更は載せない）
         registry\extrun-add.reg    右クリックメニューへの登録（UTF-16 LE に変換）
         registry\extrun-remove.reg 同じく解除
@@ -120,9 +120,12 @@ Copy-AsWindowsText (Join-Path $Root 'packaging\readme.txt') `
                    (Join-Path $Payload 'readme.txt') $true
 Copy-AsWindowsText (Join-Path $Root 'extrun-config.txt') `
                    (Join-Path $Payload 'extrun-config.sample.txt') $true
-Copy-AsWindowsText (Join-Path $Root 'extrun-config-format.md') `
+# docs\ にあるものは zip の中ではフラットに並べる。2〜3 個のファイルの
+# ために展開した人にフォルダを掘らせない。両方を同じ階層に置くので、
+# レシピ集から仕様書への相対リンクは GitHub 上でも zip の中でも通る。
+Copy-AsWindowsText (Join-Path $Root 'docs\extrun-config-format.md') `
                    (Join-Path $Payload 'extrun-config-format.md') $false
-Copy-AsWindowsText (Join-Path $Root 'extrun-recipes.md') `
+Copy-AsWindowsText (Join-Path $Root 'docs\extrun-recipes.md') `
                    (Join-Path $Payload 'extrun-recipes.md') $false
 Copy-AsWindowsText (Join-Path $Root 'CHANGELOG.md') `
                    (Join-Path $Payload 'CHANGELOG.md') $false

@@ -39,7 +39,7 @@ extrun.exe --help              # 使い方
 .\packaging\build-release.ps1   # dist\extrun-<version>-win-x64.zip と .sha256
 ```
 
-テスト → リリースビルド → 組み立て → zip → SHA256 を通しで行う。バージョンは `cargo metadata` 経由で `Cargo.toml` から読むので、スクリプトにハードコードしない。zip の中身は `extrun-<version>/` の下に `extrun.exe` / `readme.txt`（`packaging/readme.txt` 由来。GitHub の `README.md` とは別物）/ `extrun-config.sample.txt`（`extrun-config.txt` をリネーム）/ `extrun-config-format.md` / `extrun-recipes.md` / `CHANGELOG.md` / `registry/extrun-add.reg` と `registry/extrun-remove.reg`（`packaging/registry/` 由来）/ `LICENSE`。
+テスト → リリースビルド → 組み立て → zip → SHA256 を通しで行う。バージョンは `cargo metadata` 経由で `Cargo.toml` から読むので、スクリプトにハードコードしない。zip の中身は `extrun-<version>/` の下に `extrun.exe` / `readme.txt`（`packaging/readme.txt` 由来。GitHub の `README.md` とは別物）/ `extrun-config.sample.txt`（`extrun-config.txt` をリネーム）/ `extrun-config-format.md` と `extrun-recipes.md`（`docs/` 由来。**zip の中ではフラットに並べる** — 2〜3 個のために展開した人にフォルダを掘らせない。両方が同じ階層に来るので、レシピ集から仕様書への相対リンクは GitHub 上でも zip の中でも通る）/ `CHANGELOG.md` / `registry/extrun-add.reg` と `registry/extrun-remove.reg`（`packaging/registry/` 由来）/ `LICENSE`。
 
 - **`.reg` の文字コードは `.gitattributes` の `working-tree-encoding` が担う**。regedit は BOM で文字コードを判定し、BOM が無ければ ANSI と見なすので、UTF-8 のままだとメニュー名の日本語が文字化けする。`*.reg` に `working-tree-encoding=UTF-16LE-BOM` を指定してあるので、**リポジトリには UTF-8 + LF で格納され（差分も blame も GitHub の表示も読める）、作業ツリー・clone・`git archive` には UTF-16 LE + BOM + CRLF で出てくる**。clone した人がリポジトリ内の `.reg` をそのままコピーして使っても壊れない。作業ツリー側を UTF-8 で保存し直すと `git add` が「failed to encode」で止まるので、取り違えたまま進むことはない。`build-release.ps1` の `Copy-AsRegFile` は保険として残してある（Git を経由せず配布物を組む場合に効く）。
 
@@ -58,7 +58,7 @@ extrun.exe --help              # 使い方
 データの流れ:
 
 1. **`main.rs`** — 引数を絶対パスに正規化し `Target { file_type, path }` を作る。`file_type` は**フォルダなら `"folder"`、拡張子があれば小文字化した `".txt"`（先頭ドット付き）、拡張子が無ければ `"file"`**。この文字列がそのまま設定ファイルの拡張子指定と比較される。
-2. **`config.rs`** — `extrun.exe` と同じディレクトリの `extrun-config.txt` を読んでパースする（カレントディレクトリではない）。書式は `extrun-config-format.md` が正典。パースは診断メッセージ（`Diag`）を集めながら進み、エラーがあれば `main.rs` が行番号付きダイアログを出して終了する。
+2. **`config.rs`** — `extrun.exe` と同じディレクトリの `extrun-config.txt` を読んでパースする（カレントディレクトリではない）。書式は `docs/extrun-config-format.md` が正典。パースは診断メッセージ（`Diag`）を集めながら進み、エラーがあれば `main.rs` が行番号付きダイアログを出して終了する。
 3. **`menu.rs`** — `filter_menu_items` で対象に合う項目だけを残し、Win32 のポップアップメニューを構築、選択結果を `execute_command` で実行。
 4. **`placeholder.rs`** — `PathPlaceholders` が 1 パスぶんの置換値を事前計算して保持する（HashMap を使わないのは起動速度優先の意図的な設計）。`RunContext` は**対象のパスから導けない実行時の値**（現在は日時のみ）を持ち、対象をまたいで共有される。
 5. **`datetime.rs`** — 日時プレースホルダー `$t{...}` の書式解釈と検証。`LocalTime` は `GetLocalTime` を包むだけで、書式の対応表は `LocalTime::field` の 1 か所。
@@ -120,7 +120,7 @@ extrun.exe --help              # 使い方
 
 ## 関連ドキュメント
 
-- **`extrun-config-format.md`** — 設定ファイル形式の完全仕様。パーサに手を入れるときの正典。
+- **`docs/extrun-config-format.md`** — 設定ファイル形式の完全仕様。パーサに手を入れるときの正典。
 - **`extrun-config.txt`** — 公開用のサンプル設定（兼テストフィクスチャ）。書式のほぼすべてを一通り使ってある。**Windows 標準のコマンドだけで動くことが不変条件**で、`--check` は `問題は見つかりませんでした` にならなければいけない。項目を足すときは次に注意する。
   - パスは素の Windows 10/11 に必ず存在するものだけ（`mspaint.exe` と WordPad は Windows 11 には無い）。実機で `Test-Path` を確認してから書く。
   - PowerShell に渡すコマンドは**全体を `"..."` で囲んで 1 引数にする**。分割すると空白入りパスで壊れる。中では `'...'` を使う。
@@ -128,9 +128,9 @@ extrun.exe --help              # 使い方
   - ユーザーのファイルを書き換える項目は避け、新しいファイルを作る形にする。
   - アクセスキーを足すときは**ルート階層だけセクションをまたいで一意**にする（サブメニューの中は独立）。`--check` が重複を検出する。`(&O)` を末尾に足すと表示名が変わるので `menu.rs` の項目名テストも直す（`&PNG` のように名前の中の文字に付ける場合は変わらない）。
   - パーサを通した最終的な引数は、`filter_menu_items` → `PathPlaceholders::replace_args` を呼ぶ一時テストでダンプして、`ProcessStartInfo.ArgumentList`（Rust の `Command` と同じクォート規則）で実行して確かめられる。
-- **`extrun-recipes.md`** — 外部アプリ（ffmpeg / ImageMagick / IrfanView / 7-Zip / VS Code / VLC / Pandoc / 画像最適化系）を使った設定例集。`extrun-config.txt` を「Windows 標準コマンドだけで動く」に絞った代償を引き受ける文書で、**サンプル設定の「必ず動く」不変条件は適用されない**（各自のインストール先に依存するため、想定バージョンを明記してパスは読み替え前提）。各レシピに「使用: `$-p` / `[-.mp4]` / `+`」の注記を付けて書式の逆引き教材を兼ねさせているので、レシピを足すときもこの形を守る。付録 A に書式 → レシピの逆引き表、付録 C に AutoHotkey の呼び出し例がある。なお「元のファイルを書き換えず新しいファイルを作る」という方針は、サンプル設定と同じくこちらでも守ること。
+- **`docs/extrun-recipes.md`** — 外部アプリ（ffmpeg / ImageMagick / IrfanView / 7-Zip / VS Code / VLC / Pandoc / 画像最適化系）を使った設定例集。`extrun-config.txt` を「Windows 標準コマンドだけで動く」に絞った代償を引き受ける文書で、**サンプル設定の「必ず動く」不変条件は適用されない**（各自のインストール先に依存するため、想定バージョンを明記してパスは読み替え前提）。各レシピに「使用: `$-p` / `[-.mp4]` / `+`」の注記を付けて書式の逆引き教材を兼ねさせているので、レシピを足すときもこの形を守る。付録 A に書式 → レシピの逆引き表、付録 C に AutoHotkey の呼び出し例がある。なお「元のファイルを書き換えず新しいファイルを作る」という方針は、サンプル設定と同じくこちらでも守ること。
 - **`packaging/readme.txt`** — 配布 zip に入れる説明書。`README.md` の要約ではなく、zip を展開した人向けの独立した文書。見出しのバージョンは `Cargo.toml` と揃える（`build-release.ps1` が検査する）。
 - **`CHANGELOG.md`** — 変更履歴。Keep a Changelog 形式。リリースのたびに追記する。**配布 zip にも同梱するので、利用者から見て何が変わるかを書く**（リファクタリング・テストの追加・CI・ドキュメントの内部整理は載せない。それは git log の担当）。設定ファイルの見直しが要る変更は必ず「変更」の欄に入れる。利用者はそこだけ読んで更新の可否を判断する。
 - **`.github/workflows/`** — `ci.yml`（`fmt` / `clippy -D warnings` / `test` / サンプル設定の `--check`）と `release.yml`（タグから zip を作って下書き Release に添付）。
 
-同じ話が README.md・`extrun-config-format.md`・`packaging/readme.txt` の 3 か所に出てくることがある（右クリック登録、`--check`、トラブルシューティング）。片方だけ直すとずれるので、書き換えるときは横断で確認する。
+同じ話が README.md・`docs/extrun-config-format.md`・`packaging/readme.txt` の 3 か所に出てくることがある（導入手順、`--check`、トラブルシューティング）。片方だけ直すとずれるので、書き換えるときは横断で確認する。

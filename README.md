@@ -2,7 +2,7 @@
 
 **ExtRun** は、拡張子に関連付けられたコンテキストメニューから、ファイルやフォルダを任意のアプリで開く Windows 用ランチャーです。
 
-> **In English** — ExtRun is a tiny Windows launcher written in Rust. Pass it file or folder paths and it pops up a context menu at the cursor, showing only the commands that apply to those file types, then spawns the one you pick and exits. Menus are defined in a single plain-text config file (one line per entry) next to the executable. No installer, no background process, no registry writes. Documentation is in Japanese; the config file format is summarized under [設定ファイル](#設定ファイル-extrun-configtxt) and specified in full in [extrun-config-format.md](extrun-config-format.md).
+> **In English** — ExtRun is a tiny Windows launcher written in Rust. Pass it file or folder paths and it pops up a context menu at the cursor, showing only the commands that apply to those file types, then spawns the one you pick and exits. Menus are defined in a single plain-text config file (one line per entry) next to the executable. No installer, no background process, no registry writes. Documentation is in Japanese; the config file format is summarized under [設定ファイル](#設定ファイル-extrun-configtxt) and specified in full in [extrun-config-format.md](docs/extrun-config-format.md).
 
 ![ExtRun のメニュー](docs/images/menu.png)
 
@@ -28,7 +28,7 @@
 
 設定ファイルが `extrun-config.sample.txt` という名前で入っているのは、更新版を同じフォルダに展開したときに、書き換えた `extrun-config.txt` を上書きで消さないためです。
 
-ffmpeg・7-Zip・ImageMagick・VS Code といった手持ちのアプリを登録する段階になったら、[extrun-recipes.md](extrun-recipes.md)（レシピ集）にそのまま貼って使える設定例をまとめてあります。
+ffmpeg・7-Zip・ImageMagick・VS Code といった手持ちのアプリを登録する段階になったら、[extrun-recipes.md](docs/extrun-recipes.md)（レシピ集）にそのまま貼って使える設定例をまとめてあります。
 
 ### ソースからビルドする場合
 
@@ -70,7 +70,7 @@ extrun.exe --help
 ### Windows エクスプローラとの統合
 
 > [!NOTE]
-> AutoHotkey ユーザー向けに、便利なスクリプトを [extrun-recipes.md](extrun-recipes.md#付録-c-autohotkey-から呼び出す) に付録として記載していますので、そちらも参考にして下さい。
+> AutoHotkey ユーザー向けに、便利なスクリプトを [extrun-recipes.md](docs/extrun-recipes.md#付録-c-autohotkey-から呼び出す) に付録として記載していますので、そちらも参考にして下さい。
 
 右クリックメニューに追加することで、エクスプローラから直接使用できます。
 
@@ -124,9 +124,9 @@ Windows Registry Editor Version 5.00
 
 同梱の `extrun-config.sample.txt` は書式のほぼすべてを使ったサンプルで、**Windows に最初から入っているコマンドだけで動きます**（画像変換は PowerShell 経由の System.Drawing、書庫の展開は標準の `tar.exe`）。追加のインストールなしでそのまま動かせるので、まず動かしてから、お使いのアプリのパスを書き足していくのが分かりやすいと思います。
 
-**書式の完全な仕様は [extrun-config-format.md](extrun-config-format.md) を参照してください。** ここでは概要だけを示します。
+**書式の完全な仕様は [extrun-config-format.md](docs/extrun-config-format.md) を参照してください。** ここでは概要だけを示します。
 
-**実際のアプリでどう書くかは [extrun-recipes.md](extrun-recipes.md)（レシピ集）にまとめてあります。** ffmpeg・ImageMagick・IrfanView・7-Zip・VS Code・VLC・Pandoc などの設定例を、それぞれ「どの書式を使っているか」の注記付きで並べてあるので、書式の逆引きとしても使えます。外部アプリを登録するときにつまずきやすい点（コンソールが一瞬で消える、別名が引用符で終わらない、環境変数が展開されない など）も先頭にまとめてあります。
+**実際のアプリでどう書くかは [extrun-recipes.md](docs/extrun-recipes.md)（レシピ集）にまとめてあります。** ffmpeg・ImageMagick・IrfanView・7-Zip・VS Code・VLC・Pandoc などの設定例を、それぞれ「どの書式を使っているか」の注記付きで並べてあるので、書式の逆引きとしても使えます。外部アプリを登録するときにつまずきやすい点（コンソールが一瞬で消える、別名が引用符で終わらない、環境変数が展開されない など）も先頭にまとめてあります。
 
 ### 基本構造
 
@@ -263,7 +263,7 @@ JPEG に変換 [-.jpg -.jpeg] | ...   # 継承したものから .jpg / .jpeg �
 
 `---` だけの行はセパレーターです。先頭・末尾・連続したセパレーターは自動で取り除かれます。
 
-`+` は「複数の入力を並べて受け取れるアプリ」でだけ意味があります（7-Zip の圧縮、ImageMagick の `+append`、VS Code の `--diff`、VLC のプレイリストなど）。逆に ffmpeg の `-i $p` のように入力ごとにオプションが必要なアプリでは意図どおりになりません。具体例は [レシピ集 2-8](extrun-recipes.md#2-8-まとめて渡すが向くもの向かないもの) を参照してください。
+`+` は「複数の入力を並べて受け取れるアプリ」でだけ意味があります（7-Zip の圧縮、ImageMagick の `+append`、VS Code の `--diff`、VLC のプレイリストなど）。逆に ffmpeg の `-i $p` のように入力ごとにオプションが必要なアプリでは意図どおりになりません。具体例は [レシピ集 2-8](docs/extrun-recipes.md#2-8-まとめて渡すが向くもの向かないもの) を参照してください。
 
 すべてのパスが展開されるのは、`$p` を**独立した 1 つの引数**として書いたときだけです。`-i$p` のように他の文字とつなげて書くと最初の 1 つしか渡りません（`--check` が警告します）。引数に `$p` が無い場合は末尾にすべてのパスが追加されます。
 
@@ -278,7 +278,7 @@ JPEG に変換 [-.jpg -.jpeg] | ...   # 継承したものから .jpg / .jpeg �
 
 キーはメニューごとに独立しているので、親と子で同じ文字を使えます（`圧縮 (&Z)` → `&ZIP` → `個別に圧縮 (&S)` なら `Z` `Z` `S` の 3 打鍵）。同じメニューの中で重複すると押しても実行されないので、`--check` が警告します。表示したい `&` は `^&` と書きます。
 
-下線が見えないときは Alt キーを押してください。詳細は [extrun-config-format.md](extrun-config-format.md#アクセスキー) を参照してください。
+下線が見えないときは Alt キーを押してください。詳細は [extrun-config-format.md](docs/extrun-config-format.md#アクセスキー) を参照してください。
 
 ### グローバル設定
 
@@ -320,7 +320,7 @@ PNG を最適化する
  :dir @tools\scripts
 ```
 
-`^` を特殊文字（`$ @ | : > + - # [ ] ^`）の前に置くとエスケープになります。PowerShell のワンライナーを引数に書くときは `^|`（パイプ）・`^$`（PowerShell の変数）・`^@`（配列）が同時に出てくることになります。実例は [レシピ集 2-5](extrun-recipes.md#2-5--と--と--は--でエスケープする) を参照してください。
+`^` を特殊文字（`$ @ | : > + - # [ ] ^`）の前に置くとエスケープになります。PowerShell のワンライナーを引数に書くときは `^|`（パイプ）・`^$`（PowerShell の変数）・`^@`（配列）が同時に出てくることになります。実例は [レシピ集 2-5](docs/extrun-recipes.md#2-5--と--と--は--でエスケープする) を参照してください。
 
 ### 実行前の確認
 
@@ -465,7 +465,7 @@ Get-FileHash .\extrun-<version>-win-x64.zip -Algorithm SHA256
 
 ### コンソールが一瞬で開いて消える／結果が読めない
 
-ffmpeg や 7z.exe のようなコンソールアプリを直接起動すると、処理が終わった瞬間にウィンドウごと閉じるため、エラーメッセージが残りません。結果を読みたい項目は PowerShell を挟んで `-NoExit` を付けてください。書き方は [レシピ集 2-1](extrun-recipes.md#2-1-黒い窓が一瞬で消えて結果が見えない) にあります。
+ffmpeg や 7z.exe のようなコンソールアプリを直接起動すると、処理が終わった瞬間にウィンドウごと閉じるため、エラーメッセージが残りません。結果を読みたい項目は PowerShell を挟んで `-NoExit` を付けてください。書き方は [レシピ集 2-1](docs/extrun-recipes.md#2-1-黒い窓が一瞬で消えて結果が見えない) にあります。
 
 ## セキュリティについて
 
@@ -534,22 +534,26 @@ extrun/
 ├── src/
 │   ├── main.rs         # エントリポイント、引数処理
 │   ├── config.rs       # 設定ファイルのパース
+│   ├── menu.rs         # Win32 メニュー作成・表示・実行
+│   ├── placeholder.rs  # プレースホルダー置換
+│   ├── datetime.rs     # $t{...} の書式解釈
+│   ├── prompt.rs       # $?{...} の入力ダイアログ
+│   ├── icon.rs         # :icon のアイコン取り出し
 │   ├── check.rs        # --check の検証と整形
 │   ├── preview.rs      # --preview の整形
-│   ├── console.rs      # コンソールへの出力
-│   ├── menu.rs         # Win32メニュー作成・表示・実行
-│   └── placeholder.rs  # プレースホルダー置換
+│   └── console.rs      # コンソールへの出力
+├── docs/
+│   ├── extrun-config-format.md # 設定ファイルの仕様
+│   ├── extrun-recipes.md       # 外部アプリを使った設定例集
+│   └── images/                 # README で使う画像
 ├── packaging/
 │   ├── build-release.ps1       # 配布用 zip の作成
 │   └── readme.txt              # 配布物に同梱する説明書
 ├── .github/workflows/
 │   ├── ci.yml                  # fmt / clippy / test
 │   └── release.yml             # タグから zip を作って Release に添付
-├── docs/images/                # README で使う画像
 ├── build.rs                    # ビルド設定（サブシステムと VERSIONINFO）
 ├── extrun-config.txt           # 設定ファイル（サンプル兼テスト用フィクスチャ）
-├── extrun-config-format.md     # 設定ファイルの仕様
-├── extrun-recipes.md           # 外部アプリを使った設定例集
 ├── Cargo.toml                  # 依存関係
 ├── CHANGELOG.md                # 変更履歴
 ├── LICENSE                     # MIT License
