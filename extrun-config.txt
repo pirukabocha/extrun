@@ -104,6 +104,10 @@ select-first = no
  | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p_frame1.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
 
 # $d（親フォルダ）と $a（拡張子なしの名前）を組み合わせて出力先を作ります。
+#
+# Min(1.0, ...) は「拡大はしない」ための上限です。長辺が 1280px 以下の
+# 画像では等倍のまま複製されます。また出力は常に PNG なので、元が JPEG の
+# 小さい画像ではファイルサイズがかえって大きくなります。
 長辺 1280px に縮小する [-.ico]
  | @powershell
  | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$r=[Math]::Min(1.0,1280/[Math]::Max(^$i.Width,^$i.Height)); ^$b=[System.Drawing.Bitmap]::new(^$i,[int](^$i.Width*^$r),[int](^$i.Height*^$r)); ^$b.Save('$d\$a_small.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$b.Dispose(); ^$i.Dispose()"
