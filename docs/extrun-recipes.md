@@ -742,6 +742,7 @@ WebP に変換 [-.webp]
 | `+` | 全パスを 1 プロセスに渡す | [4-3](#4-3-imagemagick--複数選択をまとめる) / [5-3](#5-3-圧縮) / [6](#6-vs-code--開く比べる) / [7](#7-vlc--再生する) |
 | `:dir` | 作業フォルダ | [8](#8-ターミナル--wsl--git--フォルダで作業を始める) |
 | `:confirm` | 実行前に確認する | 書式の説明は [extrun-config-format.md](extrun-config-format.md#実行前の確認) |
+| `:admin` | 管理者として実行する | 書式の説明は [extrun-config-format.md](extrun-config-format.md#管理者として実行) |
 | `:icon` | 項目にアイコンを出す | 書式の説明は [extrun-config-format.md](extrun-config-format.md#アイコン) |
 | `>` `>>` | サブメニュー | [3-2](#3-2-動画を変換する) / [5-3](#5-3-圧縮) |
 | `&` | アクセスキー | 書式の説明は [extrun-config-format.md](extrun-config-format.md#アクセスキー) |

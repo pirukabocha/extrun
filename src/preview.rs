@@ -115,6 +115,7 @@ const LABEL_CONFIRM: &str = "実行前の確認";
 const LABEL_PROGRAM: &str = "実行ファイル";
 const LABEL_ARG: &str = "引数　　　　";
 const LABEL_DIR: &str = "作業フォルダ";
+const LABEL_ADMIN: &str = "実行の権限　";
 
 /// 1 項目から起動されるプロセスを書き出す
 ///
@@ -181,6 +182,14 @@ fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out:
             "  {}  {}{}\r\n",
             LABEL_DIR, invocation.working_dir, default_dir
         ));
+
+        // 昇格はプロセスごとなので、何回 UAC が出るかもここから読み取れる
+        if invocation.admin {
+            out.push_str(&format!(
+                "  {}  管理者（:admin。起動時に確認が出ます）\r\n",
+                LABEL_ADMIN
+            ));
+        }
     }
 }
 

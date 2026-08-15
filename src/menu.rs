@@ -12,17 +12,21 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::null_mut;
-use std::sync::{Arc, Mutex};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use std::sync::{Arc, Mutex, Once};
+use windows_sys::Win32::Foundation::{
+    GetLastError, ERROR_CANCELLED, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HBITMAP, MONITORINFO,
     MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
 };
+use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_DOWN,
 };
+use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 /// メニューアクション
@@ -637,6 +641,8 @@ pub struct Invocation {
     pub args: Vec<String>,
     /// 作業フォルダ（解決済み。未指定だった場合は実行ファイルの親）
     pub working_dir: String,
+    /// 管理者として起動するか（`:admin`）
+    pub admin: bool,
 }
 
 /// 項目と対象から、起動されるプロセスを組み立てる
@@ -662,6 +668,7 @@ pub fn resolve_invocations(
             args: all_mode_args(&item.args, targets, ctx),
             program: exe_path,
             working_dir,
+            admin: item.admin,
         }];
     }
 
@@ -671,6 +678,7 @@ pub fn resolve_invocations(
             program: exe_path.clone(),
             args: PathPlaceholders::from_path(&target.path).replace_args(&item.args, ctx),
             working_dir: working_dir.clone(),
+            admin: item.admin,
         })
         .collect()
 }
@@ -758,29 +766,149 @@ fn execute_command(item: &MenuItem, targets: &[Target]) {
         return;
     }
 
+    // 昇格はプロセスごとにしかできないので、個別実行では UAC が対象の数だけ出る。
+    // 何回出るかを先に知らせる（途中で断れば残りは起動しない）
+    if !confirm_repeated_elevation(item, targets.len()) {
+        return;
+    }
+
     // 個別実行では対象の数だけ同じ失敗が並ぶので、集めてから 1 枚だけ出す
     let mut reasons: Vec<String> = Vec::new();
     for invocation in resolve_invocations(item, targets, &ctx) {
-        if let Err(reason) = spawn_command(
+        match spawn_command(
             &invocation.program,
             &invocation.args,
             &invocation.working_dir,
+            invocation.admin,
         ) {
-            reasons.push(reason);
+            Ok(Launch::Started) => {}
+            // 昇格を断られたら、残りの対象も起動しない
+            Ok(Launch::Cancelled) => break,
+            Err(reason) => reasons.push(reason),
         }
     }
 
     show_spawn_error(&exe_path, &reasons);
 }
 
+/// 起動の結果（`Cancelled` は UAC を断られた場合）
+enum Launch {
+    Started,
+    Cancelled,
+}
+
 /// プロセスを起動する（失敗したら理由を返す）
-fn spawn_command(exe_path: &Path, args: &[String], working_dir: &str) -> Result<(), String> {
+fn spawn_command(
+    exe_path: &Path,
+    args: &[String],
+    working_dir: &str,
+    admin: bool,
+) -> Result<Launch, String> {
+    if admin {
+        return spawn_elevated(exe_path, args, working_dir);
+    }
+
     Command::new(exe_path)
         .args(args)
         .current_dir(working_dir)
         .spawn()
-        .map(|_| ())
+        .map(|_| Launch::Started)
         .map_err(|error| error.to_string())
+}
+
+/// 管理者として起動する（`:admin`）
+///
+/// `CreateProcess` には昇格の仕組みが無いので、`runas` 動詞で
+/// `ShellExecuteExW` を呼ぶ。`CreateProcess` 経路と違って引数を 1 本の文字列で
+/// 渡すため、`join_args` が引用符を付け直す。
+fn spawn_elevated(exe_path: &Path, args: &[String], working_dir: &str) -> Result<Launch, String> {
+    // ShellExecuteEx はシェル拡張に処理を委譲することがあり、STA での COM の
+    // 初期化が推奨されている。`:admin` を使う設定でだけ払うコストにするため、
+    // 起動時ではなくここで 1 回だけ初期化する
+    static COM_INIT: Once = Once::new();
+    COM_INIT.call_once(|| unsafe {
+        CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED as u32);
+    });
+
+    let verb = to_wide_string("runas");
+    let file = to_wide_string(&exe_path.to_string_lossy());
+    let parameters = to_wide_string(&join_args(args));
+    let directory = to_wide_string(working_dir);
+
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    // ExtRun は起動したらすぐ終了するので、これが無いと起動処理ごと打ち切られうる
+    info.fMask = SEE_MASK_NOASYNC;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = if args.is_empty() {
+        null_mut()
+    } else {
+        parameters.as_ptr()
+    };
+    info.lpDirectory = directory.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+
+    if unsafe { ShellExecuteExW(&mut info) } != 0 {
+        return Ok(Launch::Started);
+    }
+
+    // 昇格を断るのは「実行しない」という意思表示であって失敗ではない
+    match unsafe { GetLastError() } {
+        ERROR_CANCELLED => Ok(Launch::Cancelled),
+        code => Err(format!("管理者として起動できません (エラー {})", code)),
+    }
+}
+
+/// 引数の並びを 1 本のコマンドラインにする
+///
+/// `ShellExecuteExW` は引数を単一の文字列で受け取るので、`CreateProcess` 経路で
+/// `Command` がやっていた引用符付けを自前で行う。規則は受け取り側の
+/// `CommandLineToArgvW` に合わせてある（`Command` と同じ規則）。ここを間違えると
+/// 空白を含むパスが 2 つの引数に割れるので、テストで固めてある。
+fn join_args(args: &[String]) -> String {
+    let mut out = String::new();
+
+    for arg in args {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+
+        if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+            out.push_str(arg);
+            continue;
+        }
+
+        out.push('"');
+        let mut backslashes = 0;
+        for c in arg.chars() {
+            match c {
+                '\\' => {
+                    backslashes += 1;
+                    out.push('\\');
+                }
+                '"' => {
+                    // 引用符の前のバックスラッシュは 2 倍にしてから `\"` にする
+                    for _ in 0..=backslashes {
+                        out.push('\\');
+                    }
+                    backslashes = 0;
+                    out.push('"');
+                }
+                _ => {
+                    backslashes = 0;
+                    out.push(c);
+                }
+            }
+        }
+        // 閉じ引用符の前のバックスラッシュも 2 倍にする
+        for _ in 0..backslashes {
+            out.push('\\');
+        }
+        out.push('"');
+    }
+
+    out
 }
 
 /// 起動に失敗したときのエラーダイアログを出す
@@ -921,6 +1049,35 @@ fn confirm_execution(item: &MenuItem, targets: &[Target], ctx: &RunContext) -> b
     selected == IDYES
 }
 
+/// 個別実行の `:admin` で、UAC が何回出るかを先に知らせる
+///
+/// 昇格はプロセスごとにしかできないので、対象の数だけ確認が出る。知らずに
+/// 10 個選ぶと 10 回聞かれることになるため、その前に 1 回だけ確認する。
+/// `+`（まとめて渡す）なら起動は 1 回なので聞かない。
+fn confirm_repeated_elevation(item: &MenuItem, target_count: usize) -> bool {
+    if !item.admin || item.all_mode || target_count < 2 {
+        return true;
+    }
+
+    let body = format!(
+        "「{}」を管理者として実行します。\n\n\
+         対象が {} 件あるため、ユーザーアカウント制御の確認が {} 回表示されます。\n\
+         （途中でキャンセルすると、残りは実行されません）\n\n実行しますか?",
+        item.name, target_count, target_count
+    );
+
+    let selected = unsafe {
+        MessageBoxW(
+            null_mut(),
+            to_wide_string(&body).as_ptr(),
+            to_wide_string("ExtRun - 確認").as_ptr(),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+        )
+    };
+
+    selected == IDYES
+}
+
 /// エラーダイアログを表示
 fn show_error_dialog(title: &str, message: &str) {
     #[cfg(windows)]
@@ -950,6 +1107,44 @@ fn show_error_dialog(title: &str, message: &str) {
 mod tests {
     use super::*;
     use crate::config::parse;
+
+    /// `ShellExecuteExW` に渡す 1 本のコマンドラインの組み立て
+    ///
+    /// 受け取り側の `CommandLineToArgvW` が元の並びに戻せる形でなければならない。
+    /// ここを間違えると、空白を含むパスが 2 つの引数に割れる。
+    #[test]
+    fn 引数を1本のコマンドラインにする() {
+        // 引用符が要らないものはそのまま
+        assert_eq!(
+            join_args(&["-n".into(), "C:\\a\\b.txt".into()]),
+            "-n C:\\a\\b.txt"
+        );
+
+        // 空白を含むものだけ囲む
+        assert_eq!(
+            join_args(&["-n".into(), "C:\\a b\\c.txt".into()]),
+            "-n \"C:\\a b\\c.txt\""
+        );
+
+        // 引用符は \" にする
+        assert_eq!(join_args(&["say \"hi\"".into()]), "\"say \\\"hi\\\"\"");
+
+        // 閉じ引用符の直前のバックスラッシュは 2 倍にする（`C:\a b\` が壊れないように）
+        assert_eq!(join_args(&["C:\\a b\\".into()]), "\"C:\\a b\\\\\"");
+
+        // 空の引数は `""` として残す（省略すると引数の数が変わる）
+        assert_eq!(join_args(&["-x".into(), String::new()]), "-x \"\"");
+
+        assert_eq!(join_args(&[]), "");
+    }
+
+    #[test]
+    fn 管理者指定は起動の組み立てに伝わる() {
+        let config = parse("[.txt]\nA | C:\\Windows\\notepad.exe\n :admin").config;
+        let targets = vec![Target::from_path(PathBuf::from("C:\\x\\y.txt"))];
+        let invocations = resolve_invocations(&config.apps[0], &targets, &RunContext::for_test());
+        assert!(invocations[0].admin);
+    }
 
     /// 実際の設定ファイルを読む（テスト用フィクスチャ兼サンプル）
     fn sample_config() -> Config {
@@ -1013,7 +1208,7 @@ mod tests {
             // どのセクションにも該当しない拡張子は [file] と [file folder] だけ
             (".pdf", 16),
             ("file", 16),
-            ("folder", 21),
+            ("folder", 22),
         ];
 
         let config = sample_config();
@@ -1091,11 +1286,15 @@ mod tests {
                 "---",
                 "PowerShell で開く (P)",
                 "コマンドプロンプトで開く (C)",
+                "管理者としてコマンドプロンプトを開く (A)",
             ]
         );
         // 引数欄を空にした項目は引数なし、:dir はプレースホルダーを保ったまま
         assert!(open.submenu[3].args.is_empty());
         assert_eq!(open.submenu[3].working_dir, "$p");
+        // :admin が付くのは最後の 1 つだけ
+        assert!(!open.submenu[3].admin);
+        assert!(open.submenu[4].admin);
     }
 
     // -----------------------------------------------------------------

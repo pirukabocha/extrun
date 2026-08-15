@@ -89,13 +89,13 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
         warn_missing_icon(item, diags);
 
         if item.has_submenu() {
-            warn_unreachable_confirm(item, "サブメニューの親", diags);
+            warn_unreachable_fields(item, "サブメニューの親", diags);
             collect_item_diags(&item.submenu, diags);
             continue;
         }
 
         if item.is_separator() {
-            warn_unreachable_confirm(item, "セパレーター", diags);
+            warn_unreachable_fields(item, "セパレーター", diags);
             continue;
         }
 
@@ -168,22 +168,30 @@ fn warn_missing_icon(item: &MenuItem, diags: &mut Vec<Diag>) {
     }
 }
 
-/// 実行されない項目に `:confirm` が付いていないか調べる
+/// 実行されない項目に、実行のときだけ効くフィールドが付いていないか調べる
 ///
-/// サブメニューの親とセパレーターは選んでもコマンドが走らないので、確認も出ない。
-/// 書いた側は「確認を付けた」と思っているのに何も起きないので、黙って捨てない。
-fn warn_unreachable_confirm(item: &MenuItem, kind: &str, diags: &mut Vec<Diag>) {
-    if item.confirm.is_none() {
-        return;
+/// サブメニューの親とセパレーターは選んでもコマンドが走らないので、確認も昇格も
+/// 起きない。書いた側は「付けた」と思っているのに何も起きないので、黙って捨てない。
+fn warn_unreachable_fields(item: &MenuItem, kind: &str, diags: &mut Vec<Diag>) {
+    if item.confirm.is_some() {
+        diags.push(Diag::warning(
+            item.line,
+            format!(
+                "{}に :confirm があります（実行されないので確認も出ません）: {}",
+                kind, item.name
+            ),
+        ));
     }
 
-    diags.push(Diag::warning(
-        item.line,
-        format!(
-            "{}に :confirm があります（実行されないので確認も出ません）: {}",
-            kind, item.name
-        ),
-    ));
+    if item.admin {
+        diags.push(Diag::warning(
+            item.line,
+            format!(
+                "{}に :admin があります（実行されないので効きません）: {}",
+                kind, item.name
+            ),
+        ));
+    }
 }
 
 /// 同じ階層でアクセスキーが重複していないか調べる

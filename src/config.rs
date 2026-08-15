@@ -86,6 +86,11 @@ pub struct MenuItem {
     /// 書かなかった場合は空文字列になる。`^` は残したまま保持し、実行時に
     /// プレースホルダーと一緒に解決する（`working_dir` と同じ扱い）。
     pub confirm: Option<String>,
+    /// 管理者として実行するか（`:admin`）
+    ///
+    /// 昇格はプロセスごとなので、個別実行では対象の数だけ UAC が出る。
+    /// `+`（まとめて渡す）と組み合わせると 1 回で済む。
+    pub admin: bool,
     /// 複数選択時にすべてまとめて 1 プロセスへ渡すか（`+`）
     pub all_mode: bool,
     /// サブメニューの子項目
@@ -689,6 +694,8 @@ struct ItemLine {
     confirm: Option<(u32, String)>,
     /// `:icon`
     icon: Option<(u32, String)>,
+    /// `:admin`（値を取らないので行番号だけ）
+    admin: Option<u32>,
 }
 
 /// 行の種類
@@ -759,7 +766,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
         // 名前付きフィールド
         if let Some(rest) = trimmed.strip_prefix(':') {
             let (keyword, value) = split_keyword(rest);
-            if !matches!(keyword, "dir" | "confirm" | "icon") {
+            if !matches!(keyword, "dir" | "confirm" | "icon" | "admin") {
                 diags.push(Diag::error(
                     line,
                     format!(": の後に未知のキーワードがあります: {}", keyword),
@@ -767,8 +774,25 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
                 continue;
             }
 
+            // `:admin` は付けるか付けないかだけ。`:admin yes` と書いて「no なら
+            // 付かない」と誤解されないよう、値があればエラーにする
+            if keyword == "admin" && !value.is_empty() {
+                diags.push(Diag::error(
+                    line,
+                    format!(
+                        ":admin に値は書けません（:admin とだけ書きます）: {}",
+                        value
+                    ),
+                ));
+                continue;
+            }
+
             match stmts.last_mut() {
                 Some(Stmt::Item(item)) => {
+                    if keyword == "admin" {
+                        item.admin = Some(line);
+                        continue;
+                    }
                     let field = match keyword {
                         "dir" => &mut item.working_dir,
                         "confirm" => &mut item.confirm,
@@ -809,6 +833,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
             working_dir: None,
             confirm: None,
             icon: None,
+            admin: None,
         }));
     }
 
@@ -1172,6 +1197,7 @@ fn build_item(
         working_dir,
         confirm,
         icon,
+        admin: source.admin.is_some(),
         all_mode,
         submenu: Vec::new(),
         separator,
@@ -1550,6 +1576,34 @@ mod confirm_tests {
     fn 確認なしが既定() {
         let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe");
         assert_eq!(item.confirm, None);
+    }
+
+    #[test]
+    fn 管理者として実行する指定を読める() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :admin");
+        assert!(item.admin);
+    }
+
+    #[test]
+    fn 指定がなければ管理者にはならない() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe");
+        assert!(!item.admin);
+    }
+
+    /// `:admin no` と書いて「付かない」と誤解されないように、値は受け付けない
+    #[test]
+    fn 管理者指定に値を書くとエラー() {
+        let messages: Vec<String> = parse("[.txt]\nA | C:\\Windows\\notepad.exe\n :admin yes")
+            .errors()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains(":admin に値は書けません")),
+            "{:?}",
+            messages
+        );
     }
 
     /// 値を書かない `:confirm` も有効。既定のメッセージが使われる
