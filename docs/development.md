@@ -54,7 +54,7 @@ extrun/
 │   ├── preview.rs      # --preview の整形
 │   └── console.rs      # コンソールへの出力
 ├── docs/
-│   ├── extrun-config-format.md # 設定ファイルの仕様（正典）
+│   ├── extrun-config-format.md # 設定ファイルの仕様
 │   ├── extrun-recipes.md       # 外部アプリを使った設定例集
 │   ├── development.md          # このファイル
 │   └── images/                 # README で使う画像

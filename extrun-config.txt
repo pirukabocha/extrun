@@ -37,9 +37,9 @@ menu-position = cursor
 # yes にすると、開いてすぐ Enter で先頭の項目を実行できます。
 select-first = no
 
-# メニューにアイコンを出すか
-#   none       出さない（:icon を書いていても）
-#   specified  :icon を書いた項目だけ出す（既定）
+# メニューにアイコンを表示するか
+#   none       表示しない（:icon を書いていても）
+#   specified  :icon を書いた項目だけ表示する（既定）
 #   auto       :icon を優先し、書いていない項目は実行ファイルから取り出す
 #
 # auto は項目ごとにアイコンを読み込むぶん、開くまでが少し遅くなります。
@@ -186,6 +186,7 @@ CAB を展開する [.cab]
 [@テキスト]
 
 メモ帳で開く (&N) | @notepad
+:icon @sys\imageres.dll,247
 
 文字数・行数を数える
  | @powershell

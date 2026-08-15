@@ -24,8 +24,6 @@
 
 同梱のサンプル設定は Windows 標準のコマンドだけで動くので、追加のインストールなしでそのまま試せます。
 
-設定ファイルが `extrun-config.sample.txt` という名前で入っているのは、更新版を同じフォルダに展開したときに、書き換えた `extrun-config.txt` を上書きで消さないためです。
-
 ソースからビルドする場合は `cargo build --release` です。詳しくは [docs/development.md](docs/development.md) を参照してください。
 
 ## 使用方法
@@ -75,13 +73,6 @@ shell:sendto\
 
 レジストリ（`HKCU\Software\Classes\*\shell\...`）に項目を足せば、「送る」を経由せず右クリックメニューへ直接出せます。ver. 1.1.0 まではこの `.reg` を配布 zip に同梱していましたが、**Windows の仕様上の制限が大きいため取りやめました**。
 
-`shell\...\command` に `"%1"` を書く形式（legacy 動詞）には次の制限があります。
-
-- **複数のファイルを選ぶと、ファイルの数だけプロセスが起動します。** `+`（まとめて渡す）が原理的に機能しません
-- **16 個以上のファイルを選ぶと、右クリックメニューから項目自体が消えます。** [MultiSelectModel](https://learn.microsoft.com/en-us/windows/win32/shell/how-to-employ-the-verb-selection-model) の既定（`Document`）の上限で、`Player` を指定しても上限が 100 個に変わるだけです。呼び出しが 1 回にまとまるわけではありません
-
-1 回の起動で全パスを受け取るには COM の DropTarget / ExecuteCommand ハンドラが必要で、「常駐しない・レジストリを書かない・実行時の依存は `windows-sys` のみ」という ExtRun の設計とは両立しません。「送る」の SendTo ハンドラはこの COM 実装なので、そちらを使えば制限を受けません。
-
 ver. 1.1.0 までの `extrun-add.reg` で登録済みの場合は、同じ zip に入っていた `extrun-remove.reg` で解除できます。手元に無いときは PowerShell で次を実行してください。
 
 ```powershell
@@ -102,25 +93,9 @@ Remove-Item -LiteralPath 'HKCU:\Software\Classes\Directory\shell\ExtRun' -Recurs
 VS Code で開く | C:\Program Files\Microsoft VS Code\Code.exe | -n $p
 ```
 
-`[.txt]` は「ここから下は `.txt` が対象」という見出しです（`file` はすべてのファイル、`folder` はフォルダ）。パスは絶対パスで書き、`$p` は選んだファイルのフルパスに置き換わります。
+`[.txt]` は「ここから下は `.txt` が対象」という見出しです。パスは絶対パスで書き、`$p` は選んだファイルのフルパスに置き換わります。
 
-このほかに書けるものは次のとおりです。
-
-| 書けること | 記法 | 詳細 |
-| --- | --- | --- |
-| パスの部品 | `$p` `$-p` `$d` `$n` `$a` `$f` `$e` | [プレースホルダー](docs/extrun-config-format.md#プレースホルダー) |
-| 実行した日時 | `$t{yyyyMMdd}` `$t{HH-mm-ss}` `$t{ddd}` | [日時](docs/extrun-config-format.md#日時) |
-| 選んだあとに値を聞く | `$?{説明=既定値}` `$?int{...}` `$?name{...}` | [入力欄](docs/extrun-config-format.md#入力欄) |
-| 実行前の確認ダイアログ | `:confirm メッセージ` | [実行前の確認](docs/extrun-config-format.md#実行前の確認) |
-| 項目にアイコンを出す | `:icon パス,番号` | [アイコン](docs/extrun-config-format.md#アイコン) |
-| サブメニュー・区切り線 | `>` `>>` `---` | [行頭マーカー](docs/extrun-config-format.md#行頭マーカー) |
-| 複数選択をまとめて渡す | `+` | [行頭マーカー](docs/extrun-config-format.md#行頭マーカー) |
-| キーボードで選ぶ | `開く (&O)` | [アクセスキー](docs/extrun-config-format.md#アクセスキー) |
-| 項目ごとに対象を変える | `[-.jpg]` `[.svg]` | [項目ごとの指定](docs/extrun-config-format.md#項目ごとの指定) |
-| パスの共通化・作業フォルダ | `@名前 = 値` `:dir` | [別名](docs/extrun-config-format.md#別名) |
-| メニューの位置・アイコンの有無 | `[extrun]` | [グローバル設定](docs/extrun-config-format.md#グローバル設定) |
-
-**書式の完全な仕様は [docs/extrun-config-format.md](docs/extrun-config-format.md) が正典です。** 巻頭に記法の早見表と目次があります。
+**書式の完全な仕様は [docs/extrun-config-format.md](docs/extrun-config-format.md) です。** 巻頭に記法の早見表と目次があります。
 
 **実際のアプリでどう書くかは [docs/extrun-recipes.md](docs/extrun-recipes.md)（レシピ集）にまとめてあります。** ffmpeg・ImageMagick・IrfanView・7-Zip・VS Code・VLC・Pandoc などの設定例を、それぞれ「どの書式を使っているか」の注記付きで並べてあるので、書式の逆引きとしても使えます。外部アプリを登録するときにつまずきやすい点（コンソールが一瞬で消える、別名が引用符で終わらない、環境変数が展開されない など）も先頭にまとめてあります。
 
@@ -166,7 +141,7 @@ ExtRun は、`extrun-config.txt` に書かれたコマンドをそのまま起�
 
 ## ドキュメント
 
-| | |
+| ファイル名 | 内容 |
 | --- | --- |
 | [docs/extrun-config-format.md](docs/extrun-config-format.md) | 設定ファイル形式の完全な仕様（記法の早見表つき） |
 | [docs/extrun-recipes.md](docs/extrun-recipes.md) | 外部アプリを使った設定例集と、AutoHotkey から呼び出す例 |
