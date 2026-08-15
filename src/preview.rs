@@ -110,6 +110,7 @@ fn write_items(
 /// 語は設定ファイルの仕様と `--check` のメッセージに合わせる（`作業` のように
 /// 縮めると何を指しているのか読み取れない）。幅は全角スペースで揃える。
 /// `check.rs` の `警告　` と同じやり方で、等幅フォントなら桁が合う。
+const LABEL_CONFIRM: &str = "実行前の確認";
 const LABEL_PROGRAM: &str = "実行ファイル";
 const LABEL_ARG: &str = "引数　　　　";
 const LABEL_DIR: &str = "作業フォルダ";
@@ -131,6 +132,16 @@ fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out:
     } else {
         ""
     };
+
+    // 確認は項目に対して 1 回なので、起動ごとの繰り返しの外に出す
+    if let Some(message) = &item.confirm {
+        let shown = if message.is_empty() {
+            "あり（メッセージなし）".to_string()
+        } else {
+            crate::placeholder::PathPlaceholders::from_path(&targets[0].path).replace(message, ctx)
+        };
+        out.push_str(&format!("  {}  {}\r\n", LABEL_CONFIRM, shown));
+    }
 
     let invocations = resolve_invocations(item, targets, ctx);
     let total = invocations.len();
@@ -190,6 +201,30 @@ mod tests {
         RunContext {
             now: crate::datetime::test_time(),
         }
+    }
+
+    /// 実行前に確認が入ることも「何が起きるか」の一部なので出す
+    #[test]
+    fn 実行前の確認を出す() {
+        let config = config_of(
+            "[.txt]\nメッセージあり | C:\\Windows\\notepad.exe\n :confirm $n を上書きします\nメッセージなし | C:\\Windows\\notepad.exe\n :confirm\n確認なし | C:\\Windows\\notepad.exe",
+        );
+        let text = report(&config, &[target("a.txt")], &ctx());
+
+        // メッセージのプレースホルダーも解決される
+        assert!(
+            text.contains("実行前の確認  a.txt を上書きします"),
+            "{}",
+            text
+        );
+        assert!(
+            text.contains("実行前の確認  あり（メッセージなし）"),
+            "{}",
+            text
+        );
+        // :confirm を書いていない項目には行そのものが出ない
+        let 確認なし = text.split("確認なし").nth(1).expect("確認なしの節がある");
+        assert!(!確認なし.contains("実行前の確認"), "{}", 確認なし);
     }
 
     /// 日時も解決済みで出る（書式を確かめるのはプレビューの主な用途のひとつ）

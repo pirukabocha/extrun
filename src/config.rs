@@ -78,6 +78,12 @@ pub struct MenuItem {
     pub args: Vec<String>,
     /// 作業フォルダ（空ならパスの親フォルダ）
     pub working_dir: String,
+    /// 実行前に確認する（`:confirm`）
+    ///
+    /// `None` は確認なし。`Some` の中身は添えるメッセージで、`:confirm` に値を
+    /// 書かなかった場合は空文字列になる。`^` は残したまま保持し、実行時に
+    /// プレースホルダーと一緒に解決する（`working_dir` と同じ扱い）。
+    pub confirm: Option<String>,
     /// 複数選択時にすべてまとめて 1 プロセスへ渡すか（`+`）
     pub all_mode: bool,
     /// サブメニューの子項目
@@ -543,6 +549,8 @@ struct ItemLine {
     line: u32,
     text: String,
     working_dir: Option<(u32, String)>,
+    /// `:confirm`（値は省略できるので空文字列になりうる）
+    confirm: Option<(u32, String)>,
 }
 
 /// 行の種類
@@ -613,18 +621,26 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
         // 名前付きフィールド
         if let Some(rest) = trimmed.strip_prefix(':') {
             let (keyword, value) = split_keyword(rest);
-            if keyword != "dir" {
+            if !matches!(keyword, "dir" | "confirm") {
                 diags.push(Diag::error(
                     line,
                     format!(": の後に未知のキーワードがあります: {}", keyword),
                 ));
                 continue;
             }
+
             match stmts.last_mut() {
                 Some(Stmt::Item(item)) => {
-                    item.working_dir = Some((line, value.to_string()));
+                    let field = match keyword {
+                        "dir" => &mut item.working_dir,
+                        _ => &mut item.confirm,
+                    };
+                    *field = Some((line, value.to_string()));
                 }
-                _ => diags.push(Diag::error(line, ":dir の前に項目がありません".to_string())),
+                _ => diags.push(Diag::error(
+                    line,
+                    format!(":{} の前に項目がありません", keyword),
+                )),
             }
             continue;
         }
@@ -652,6 +668,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
             line,
             text: trimmed.to_string(),
             working_dir: None,
+            confirm: None,
         }));
     }
 
@@ -734,11 +751,16 @@ fn parse_setting(
 ) {
     let line = item.line;
 
-    if item.working_dir.is_some() {
-        diags.push(Diag::error(
-            line,
-            format!("[{}] の中では :dir を使えません", SETTINGS_SECTION),
-        ));
+    for (keyword, present) in [
+        ("dir", item.working_dir.is_some()),
+        ("confirm", item.confirm.is_some()),
+    ] {
+        if present {
+            diags.push(Diag::error(
+                line,
+                format!("[{}] の中では :{} を使えません", SETTINGS_SECTION, keyword),
+            ));
+        }
     }
 
     let Some((key, value)) = item.text.split_once('=') else {
@@ -942,9 +964,19 @@ fn build_item(
         None => String::new(),
     };
 
+    // 確認メッセージ（同じく `^` を残す。値なしの `:confirm` は空文字列）
+    let confirm = source.confirm.as_ref().map(|(confirm_line, value)| {
+        warn_stray_caret(value, *confirm_line, diags);
+        aliases.expand(value, *confirm_line, diags)
+    });
+
     // 日時の書式はここで検証する。書き間違えると誤った文字列が黙って
     // ファイル名に入るので、警告ではなくエラーにしてメニューを止める
-    for text in args.iter().chain(std::iter::once(&working_dir)) {
+    for text in args
+        .iter()
+        .chain(std::iter::once(&working_dir))
+        .chain(confirm.iter())
+    {
         if let Some(message) = crate::datetime::validate(text) {
             diags.push(Diag::error(line, message));
         }
@@ -958,6 +990,7 @@ fn build_item(
         path,
         args,
         working_dir,
+        confirm,
         all_mode,
         submenu: Vec::new(),
         separator,
@@ -1114,6 +1147,97 @@ fn parse_extensions(
 }
 
 /// 引数を空白区切りで分解する（引用符で空白を含められる）
+#[cfg(test)]
+mod confirm_tests {
+    use super::*;
+
+    fn item_of(text: &str) -> MenuItem {
+        let parsed = parse(text);
+        let errors: Vec<&str> = parsed.errors().map(|d| d.message.as_str()).collect();
+        assert!(errors.is_empty(), "予期しないエラー: {:?}", errors);
+        parsed.config.apps.into_iter().next().expect("項目がある")
+    }
+
+    #[test]
+    fn 確認なしが既定() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe");
+        assert_eq!(item.confirm, None);
+    }
+
+    /// 値を書かない `:confirm` も有効。既定のメッセージが使われる
+    #[test]
+    fn 値のない確認は空文字列になる() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :confirm");
+        assert_eq!(item.confirm.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn 確認のメッセージを読める() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :confirm 元に戻せません");
+        assert_eq!(item.confirm.as_deref(), Some("元に戻せません"));
+    }
+
+    /// `:dir` と同じく、プレースホルダーは実行時に解決するので `^` を残す
+    #[test]
+    fn 確認のメッセージはエスケープを残す() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :confirm $n を ^$p にします");
+        assert_eq!(item.confirm.as_deref(), Some("$n を ^$p にします"));
+    }
+
+    #[test]
+    fn 確認のメッセージでも別名が展開される() {
+        let item = item_of(
+            "@out = C:\\out\n[.txt]\nA | C:\\Windows\\notepad.exe\n :confirm @out に書き出します",
+        );
+        assert_eq!(item.confirm.as_deref(), Some("C:\\out に書き出します"));
+    }
+
+    #[test]
+    fn 確認のメッセージの日時も検証される() {
+        let parsed = parse("[.txt]\nA | C:\\Windows\\notepad.exe\n :confirm $t{yyyy/MM/dz} に実行");
+        assert!(parsed.has_error());
+    }
+
+    #[test]
+    fn 項目の前の確認はエラー() {
+        let messages: Vec<String> = parse("[.txt]\n :confirm ためし")
+            .errors()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains(":confirm の前に項目が")),
+            "{:?}",
+            messages
+        );
+    }
+
+    #[test]
+    fn 設定セクションの中では使えない() {
+        let messages: Vec<String> = parse("[extrun]\nselect-first = yes\n :confirm ためし")
+            .errors()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains(":confirm を使えません")),
+            "{:?}",
+            messages
+        );
+    }
+
+    #[test]
+    fn 未知のキーワードはこれまでどおりエラー() {
+        let messages: Vec<String> = parse("[.txt]\nA | C:\\a.exe\n :verify はい")
+            .errors()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains("未知のキーワード")),
+            "{:?}",
+            messages
+        );
+    }
+}
+
 #[cfg(test)]
 mod datetime_tests {
     use super::*;

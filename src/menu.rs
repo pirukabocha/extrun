@@ -623,6 +623,11 @@ fn execute_command(item: &MenuItem, targets: &[Target]) {
     // ときに $t{ss} がずれて、まとめて作ったはずのファイル名が揃わなくなる
     let ctx = RunContext::capture();
 
+    // 確認は項目に対して 1 回。対象の数だけ聞かれても答えは変わらない
+    if !confirm_execution(item, targets, &ctx) {
+        return;
+    }
+
     // 個別実行では対象の数だけ同じ失敗が並ぶので、集めてから 1 枚だけ出す
     let mut reasons: Vec<String> = Vec::new();
     for invocation in resolve_invocations(item, targets, &ctx) {
@@ -679,6 +684,52 @@ fn show_spawn_error(exe_path: &Path, reasons: &[String]) {
     }
 
     show_error_dialog("エラー", &message);
+}
+
+/// 確認ダイアログの本文に並べる対象の数の上限
+const MAX_CONFIRM_TARGETS: usize = 15;
+
+/// `:confirm` が付いていれば実行前に確認する（実行してよければ `true`）
+///
+/// 対象の一覧を必ず添える。「何をするか」はメッセージで分かっても、「何に対して
+/// するか」は選び間違えているかもしれない部分なので、目で確かめられるようにする。
+fn confirm_execution(item: &MenuItem, targets: &[Target], ctx: &RunContext) -> bool {
+    let Some(message) = &item.confirm else {
+        return true;
+    };
+
+    let mut body = if message.is_empty() {
+        format!("「{}」を実行します。", item.name)
+    } else {
+        // メッセージにもプレースホルダーを書ける（基準は :dir と同じく最初の対象）
+        PathPlaceholders::from_path(&targets[0].path).replace(message, ctx)
+    };
+
+    body.push_str(&format!("\n\n対象: {} 件\n", targets.len()));
+    for target in targets.iter().take(MAX_CONFIRM_TARGETS) {
+        body.push_str(&format!("{}\n", target.path.display()));
+    }
+    if targets.len() > MAX_CONFIRM_TARGETS {
+        body.push_str(&format!(
+            "ほか {} 件\n",
+            targets.len() - MAX_CONFIRM_TARGETS
+        ));
+    }
+
+    body.push_str("\n実行しますか?");
+
+    // 既定を「いいえ」にする。select-first と Enter で誤って選んだときに、
+    // そのまま Enter を続けても実行されないようにするのがこの機能の主眼
+    let selected = unsafe {
+        MessageBoxW(
+            null_mut(),
+            to_wide_string(&body).as_ptr(),
+            to_wide_string("ExtRun - 確認").as_ptr(),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+        )
+    };
+
+    selected == IDYES
 }
 
 /// エラーダイアログを表示

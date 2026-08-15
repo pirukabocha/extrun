@@ -2,8 +2,9 @@
 `extrun.exe --check` の実装
 
 設定ファイルをパースし、書式のエラーと実行ファイルの存在確認の結果を
-行番号付きでコンソールに出力する。メニューの構築とは独立しているので、
-将来 `--preview` を足すときもここには手を入れずに済む。
+行番号付きでコンソールに出力する。メニューの構築とは独立している。
+
+「そのパスに対して実際に何が起動されるか」を見るのは `preview.rs` の担当。
 */
 
 use crate::config::{Config, Diag, MenuItem, Severity};
@@ -84,11 +85,13 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
 
     for item in items {
         if item.has_submenu() {
+            warn_unreachable_confirm(item, "サブメニューの親", diags);
             collect_item_diags(&item.submenu, diags);
             continue;
         }
 
         if item.is_separator() {
+            warn_unreachable_confirm(item, "セパレーター", diags);
             continue;
         }
 
@@ -110,6 +113,24 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
 
         warn_embedded_path_placeholder(item, diags);
     }
+}
+
+/// 実行されない項目に `:confirm` が付いていないか調べる
+///
+/// サブメニューの親とセパレーターは選んでもコマンドが走らないので、確認も出ない。
+/// 書いた側は「確認を付けた」と思っているのに何も起きないので、黙って捨てない。
+fn warn_unreachable_confirm(item: &MenuItem, kind: &str, diags: &mut Vec<Diag>) {
+    if item.confirm.is_none() {
+        return;
+    }
+
+    diags.push(Diag::warning(
+        item.line,
+        format!(
+            "{}に :confirm があります（実行されないので確認も出ません）: {}",
+            kind, item.name
+        ),
+    ));
 }
 
 /// 同じ階層でアクセスキーが重複していないか調べる
@@ -200,6 +221,34 @@ mod tests {
         assert!(diags
             .iter()
             .any(|d| d.message.contains("実行するパスがありません")));
+    }
+
+    /// 実行されない項目に付けた :confirm は黙って捨てられるので警告する
+    #[test]
+    fn 実行されない項目の確認を警告する() {
+        let 親 = diags_of("[.txt]\n親\n :confirm よろしいですか\n> 子 | C:\\Windows\\notepad.exe");
+        assert!(
+            親.iter()
+                .any(|d| d.message.contains("サブメニューの親に :confirm")),
+            "{:?}",
+            親
+        );
+
+        let 区切り = diags_of("[.txt]\nA | C:\\Windows\\notepad.exe\n---\n :confirm ためし\nB | C:\\Windows\\notepad.exe");
+        assert!(
+            区切り
+                .iter()
+                .any(|d| d.message.contains("セパレーターに :confirm")),
+            "{:?}",
+            区切り
+        );
+    }
+
+    /// 実行される項目に付いていれば当然ながら警告しない
+    #[test]
+    fn 実行される項目の確認は警告しない() {
+        let diags = diags_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :confirm よろしいですか");
+        assert!(diags.is_empty(), "{:?}", diags);
     }
 
     #[test]
