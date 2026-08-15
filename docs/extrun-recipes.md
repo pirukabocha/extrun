@@ -162,14 +162,23 @@ OK   -NoProfile -Command "Get-Item -LiteralPath '$p'"
 
 `^` は上記のような特殊文字の前に置いたときだけエスケープとして働くので、`C:\Foo^Bar\app.exe` のようなパスはそのまま書けます。逆に、`[` `,` `;` `%` `>` `=` などは特殊文字ではないので**そのまま書けます**（ffmpeg の `-filter_complex` や ImageMagick の `-resize 1280x1280>` はエスケープ不要）。
 
-### 2-6. 環境変数は展開されない
+### 2-6. 環境変数はパス欄でだけ展開される
 
-`%LOCALAPPDATA%` や `%USERPROFILE%` は展開されません。実際のパスを書いてください。VS Code のように既定でユーザーごとの場所へ入るアプリは、ここを間違えがちです。
+`%LOCALAPPDATA%` や `%USERPROFILE%` は展開されます。VS Code のようにユーザーごとの場所へ入るアプリでも、**ユーザー名を書かずに済みます**（別の PC にそのまま持っていける設定になります）。
 
 ```
-NG   @code = %LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe
-OK   @code = C:\Users\yourname\AppData\Local\Programs\Microsoft VS Code\Code.exe
+@code = %LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe
 ```
+
+展開されるのは**パスを書く 3 か所**（実行ファイル欄・`:dir`・`:icon`）だけです。**引数欄では展開されません。**
+
+```
+エラーレベルを表示 | @cmd | /k echo %errorlevel%     ← そのまま cmd に渡る
+```
+
+`cmd.exe` に渡す `%errorlevel%` やバッチの `%~n1` を横取りしないための線引きです。展開されるかどうかは欄で決まるので、`@apps = %ProgramFiles%` のような別名も、引数欄で使えば展開されません。
+
+未定義の変数はそのまま残ります。`--check` に `実行ファイルが見つかりません: %LOCALAPDATA%\...` のように**展開されていない姿で出る**ので、綴りの間違いはそこで気づけます。
 
 ### 2-7. `.bat` / `.cmd` / `.ps1` は直接起動できない
 
@@ -528,10 +537,10 @@ IrfanView で長辺を指定して縮小
 ## 6. VS Code — 開く・比べる
 
 > [Visual Studio Code](https://code.visualstudio.com/) 
-> 既定ではユーザーごとの場所にインストールされます。System Installer を使った場合は `C:\Program Files\Microsoft VS Code\Code.exe` です。
+> 既定ではユーザーごとの場所にインストールされます。`%LOCALAPPDATA%` を使えばユーザー名を書かずに済みます（→ [2-6](#2-6-環境変数はパス欄でだけ展開される)）。System Installer を使った場合は `%ProgramFiles%\Microsoft VS Code\Code.exe` です。
 
 ```
-@code = C:\Users\yourname\AppData\Local\Programs\Microsoft VS Code\Code.exe
+@code = %LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe
 ```
 
 ```
@@ -728,6 +737,7 @@ WebP に変換 [-.webp]
 | `$?{...}` | 実行時に入力欄を出す | [4-6](#4-6-大きさや品質をそのつど決める) |
 | `[-.mp4]` | 継承した拡張子から引く | [3-2](#3-2-動画を変換する) / [4-1](#4-1-imagemagick--形式変換) |
 | `[+.svg]` | 継承した拡張子に足す | [4-1](#4-1-imagemagick--形式変換)（PNG にする） |
+| `%LOCALAPPDATA%` | 環境変数（パス欄のみ） | [2-6](#2-6-環境変数はパス欄でだけ展開される) / [6](#6-vs-code--開く比べる) / [付録 B](#付録-b-別名まとめコピペ用) |
 | `[.svg]` | 継承を無視して置き換える | [4-5](#4-5-irfanview)（フォルダ用の項目） |
 | `+` | 全パスを 1 プロセスに渡す | [4-3](#4-3-imagemagick--複数選択をまとめる) / [5-3](#5-3-圧縮) / [6](#6-vs-code--開く比べる) / [7](#7-vlc--再生する) |
 | `:dir` | 作業フォルダ | [8](#8-ターミナル--wsl--git--フォルダで作業を始める) |
@@ -747,16 +757,16 @@ WebP に変換 [-.webp]
 このドキュメントで使った別名の一覧です。設定ファイルの先頭に貼り、**使うものだけ残して、パスを自分の環境に直して**ください。
 
 ```
-# --- 場所 ---
-@apps  = C:\Program Files
+# --- 場所（%...% は環境変数。パス欄でだけ展開されます）---
+@apps  = %ProgramFiles%
 @tools = C:\Tools
-@sys   = C:\Windows\System32
-@local = C:\Users\yourname\AppData\Local
+@sys   = %SystemRoot%\System32
+@local = %LOCALAPPDATA%
 
 # --- Windows 標準 ---
 @cmd        = @sys\cmd.exe
 @powershell = @sys\WindowsPowerShell\v1.0\powershell.exe
-@explorer   = C:\Windows\explorer.exe
+@explorer   = %SystemRoot%\explorer.exe
 
 # --- 動画・音声 ---
 @ff     = @tools\ffmpeg\bin

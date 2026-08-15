@@ -7,7 +7,7 @@
 「そのパスに対して実際に何が起動されるか」を見るのは `preview.rs` の担当。
 */
 
-use crate::config::{Config, Diag, MenuItem, Severity};
+use crate::config::{self, Config, Diag, MenuItem, Severity};
 use crate::console;
 use crate::menu;
 use std::path::Path;
@@ -107,8 +107,11 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
             continue;
         }
 
+        // 相対パスは実行時のカレント次第なので確認しない。ただし展開されなかった
+        // `%NAME%` が残っているパスは、絶対と判定されないだけで解決もしないので見る
         let path = Path::new(&item.path);
-        if path.is_absolute() && !path.exists() {
+        let checkable = path.is_absolute() || config::has_unexpanded_env(&item.path);
+        if checkable && !path.exists() {
             diags.push(Diag::warning(
                 item.line,
                 format!("実行ファイルが見つかりません: {}", item.path),
@@ -140,7 +143,7 @@ fn warn_missing_icon(item: &MenuItem, diags: &mut Vec<Diag>) {
     };
 
     let path = Path::new(&spec.path);
-    if !path.is_absolute() {
+    if !path.is_absolute() && !config::has_unexpanded_env(&spec.path) {
         return;
     }
 
@@ -271,6 +274,26 @@ mod tests {
         assert!(diags
             .iter()
             .any(|d| d.message.contains("実行するパスがありません")));
+    }
+
+    /// パスの先頭に書いた変数の綴りを間違えると、展開されないまま残る。
+    /// このパスは絶対パスと判定されないので、存在確認から漏れないようにする
+    #[test]
+    fn 展開されなかった環境変数を含むパスを警告する() {
+        let diags = diags_of("[.txt]\nX | %EXTRUN_NO_SUCH_VAR%\\Programs\\app.exe");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("実行ファイルが見つかりません")),
+            "{:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn 展開された環境変数のパスは警告しない() {
+        let diags = diags_of("[.txt]\nX | %SystemRoot%\\notepad.exe");
+        assert!(diags.is_empty(), "{:?}", diags);
     }
 
     /// CreateProcess はスクリプトを起動できないので、書いた時点で知らせる
