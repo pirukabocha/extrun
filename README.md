@@ -22,7 +22,7 @@
 1. リリースページから `extrun-<version>-win-x64.zip` をダウンロード
 2. 任意のフォルダに展開
 3. `extrun-config.sample.txt` をコピーして `extrun-config.txt` にリネーム
-4. 任意で右クリックメニューに登録（下記）
+4. 任意で「送る」メニューに登録（下記）
 
 同梱のサンプル設定は Windows 標準のコマンドだけで動くので、追加のインストールなしでそのまま試せます。
 
@@ -67,56 +67,48 @@ extrun.exe --help
 
 コマンドを実行すると、カーソル位置にコンテキストメニューが表示されます。
 
-### Windows エクスプローラとの統合
+### Windows エクスプローラから使う
 
 > [!NOTE]
 > AutoHotkey ユーザー向けに、便利なスクリプトを [extrun-recipes.md](docs/extrun-recipes.md#付録-c-autohotkey-から呼び出す) に付録として記載していますので、そちらも参考にして下さい。
 
-右クリックメニューに追加することで、エクスプローラから直接使用できます。
-
-一番簡単なのは「送る」メニューに登録することです：
+**「送る」メニューに登録するのがおすすめです。**
 
 1. エクスプローラのアドレスバーに `shell:sendto` と入力
 2. 開いたフォルダに `extrun.exe` のショートカットを置く
 
-これで、右クリック →「送る」→ ExtRun で選択中のファイルを実行できます。
+右クリック →「送る」→ ExtRun で、選択中のファイルにメニューが出ます。**選んだファイルは何個でも 1 つの ExtRun にまとめて渡される**ので、`+`（まとめて渡す）を付けた項目もそのまま使えます。
 
-レジストリを編集し、右クリックメニューに項目として追加する方法もあります。**配布 zip には、この内容を書き込み済みの `registry\extrun-add.reg` / `registry\extrun-remove.reg` が入っています**ので、そちらを使えばパスを書き換えるだけで済みます。
+ショートカットは何個でも置けます。「リンク先」の末尾にオプションを足しておけば、呼び出し方ごとにメニューの出方を変えられます。
 
-自分で作る場合は以下の内容を `.reg` ファイルとして保存し、`extrun.exe` のパスを実際の置き場所に書き換えてから実行してください。
-
-> [!IMPORTANT]
-> **`.reg` は UTF-16 LE（BOM あり）で保存してください。** regedit は BOM で文字コードを判定し、BOM が無いファイルは ANSI として読みます。メモ帳の既定は UTF-8 なので、そのまま保存するとメニュー名の日本語が文字化けするか、インポートに失敗します。メモ帳なら「名前を付けて保存」で文字コードに `UTF-16 LE` を選んでください。
-
-```registry
-Windows Registry Editor Version 5.00
-
-[HKEY_CURRENT_USER\Software\Classes\*\shell\ExtRun]
-@="ExtRun で開く(&E)"
-
-[HKEY_CURRENT_USER\Software\Classes\*\shell\ExtRun\command]
-@="\"C:\\Tools\\extrun\\extrun.exe\" \"%1\""
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\ExtRun]
-@="ExtRun で開く(&E)"
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\ExtRun\command]
-@="\"C:\\Tools\\extrun\\extrun.exe\" \"%1\""
+```text
+shell:sendto\
+├── ExtRun.lnk           "C:\Tools\extrun\extrun.exe"
+└── ExtRun (中央).lnk    "C:\Tools\extrun\extrun.exe" --at screen --select-first
 ```
 
-`*` がファイル、`Directory` がフォルダ向けの登録です。`HKEY_CURRENT_USER\Software\Classes` に書くので**管理者権限は不要**で、現在のユーザーにだけ適用されます（`HKEY_CLASSES_ROOT` に直接書くと昇格が必要になります）。
+> [!NOTE]
+> **Windows 11 では「送る」は「その他のオプションを表示」の中にあります。** Shift + 右クリックで直接開けます。
 
-解除するときは、キー名の前に `-` を付けた `.reg` を実行します。
+#### 右クリックメニューへの直接登録は勧めません
 
-```registry
-Windows Registry Editor Version 5.00
+レジストリ（`HKCU\Software\Classes\*\shell\...`）に項目を足せば、「送る」を経由せず右クリックメニューへ直接出せます。ver. 1.1.0 まではこの `.reg` を配布 zip に同梱していましたが、**Windows の仕様上の制限が大きいため取りやめました**。
 
-[-HKEY_CURRENT_USER\Software\Classes\*\shell\ExtRun]
-[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\ExtRun]
+`shell\...\command` に `"%1"` を書く形式（legacy 動詞）には次の制限があります。
+
+- **複数のファイルを選ぶと、ファイルの数だけプロセスが起動します。** `+`（まとめて渡す）が原理的に機能しません
+- **16 個以上のファイルを選ぶと、右クリックメニューから項目自体が消えます。** [MultiSelectModel](https://learn.microsoft.com/en-us/windows/win32/shell/how-to-employ-the-verb-selection-model) の既定（`Document`）の上限で、`Player` を指定しても上限が 100 個に変わるだけです。呼び出しが 1 回にまとまるわけではありません
+
+1 回の起動で全パスを受け取るには COM の DropTarget / ExecuteCommand ハンドラが必要で、「常駐しない・レジストリを書かない・実行時の依存は `windows-sys` のみ」という ExtRun の設計とは両立しません。「送る」の SendTo ハンドラはこの COM 実装なので、そちらを使えば制限を受けません。
+
+ver. 1.1.0 までの `extrun-add.reg` で登録済みの場合は、同じ zip に入っていた `extrun-remove.reg` で解除できます。手元に無いときは PowerShell で次を実行してください。
+
+```powershell
+Remove-Item -LiteralPath 'HKCU:\Software\Classes\*\shell\ExtRun' -Recurse
+Remove-Item -LiteralPath 'HKCU:\Software\Classes\Directory\shell\ExtRun' -Recurse
 ```
 
-> [!CAUTION]
-> **Windows 11 での注意**: 右クリックメニューが簡略化されているため、追加した項目は「その他のオプションを表示」の中に入ります。Shift + 右クリックで直接開けます。
+`-LiteralPath` が要るのは、`*` を PowerShell がワイルドカードとして解釈しないようにするためです。
 
 ## 設定ファイル (extrun-config.txt)
 
@@ -518,12 +510,9 @@ extrun-<version>/
 ├── extrun.exe
 ├── readme.txt                 # packaging/readme.txt。配布専用でこの README とは別物
 ├── extrun-config.sample.txt   # extrun-config.txt をリネームしたもの
-├── extrun-config-format.md
-├── extrun-recipes.md
+├── extrun-config-format.md    # docs/ から。zip の中ではフラットに並べる
+├── extrun-recipes.md          # 同上
 ├── CHANGELOG.md
-├── registry/                  # 右クリックメニュー登録用（UTF-16 LE に変換して同梱）
-│   ├── extrun-add.reg
-│   └── extrun-remove.reg
 └── LICENSE
 ```
 

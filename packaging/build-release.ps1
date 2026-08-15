@@ -17,8 +17,6 @@
         extrun-config-format.md    docs\ から。zip の中ではフラットに並べる
         extrun-recipes.md          同じく docs\ から。外部アプリを使った設定例集
         CHANGELOG.md               更新内容（利用者向けの区分で書く。内部の変更は載せない）
-        registry\extrun-add.reg    右クリックメニューへの登録（UTF-16 LE に変換）
-        registry\extrun-remove.reg 同じく解除
         LICENSE
 
     設定ファイルを extrun-config.txt のまま入れないのは、更新版を同じ
@@ -51,22 +49,6 @@ function Copy-AsWindowsText {
     $text = [System.IO.File]::ReadAllText($From)
     $text = $text -replace "`r`n", "`n" -replace "`n", "`r`n"
     [System.IO.File]::WriteAllText($To, $text, [System.Text.UTF8Encoding]::new($Bom))
-}
-
-# .reg は UTF-16 LE + BOM で書き出す。
-# regedit は BOM で文字コードを判定し、BOM が無ければ ANSI と見なすので、
-# UTF-8 のまま入れるとメニュー名の日本語が文字化けする（あるいは
-# 先頭の署名行を読めずインポートに失敗する）。
-#
-# 通常は .gitattributes の working-tree-encoding が作業ツリーの時点で
-# UTF-16 にしてくれるので、ここは実質そのままの書き写しになる。Git を
-# 経由せずに配布物を組む場合の保険として変換を残してある
-# （ReadAllText は BOM を見て読むので、入力がどちらでも通る）。
-function Copy-AsRegFile {
-    param([string]$From, [string]$To)
-    $text = [System.IO.File]::ReadAllText($From)
-    $text = $text -replace "`r`n", "`n" -replace "`n", "`r`n"
-    [System.IO.File]::WriteAllText($To, $text, [System.Text.UnicodeEncoding]::new($false, $true))
 }
 
 # --- バージョンを Cargo.toml から取得 --------------------------------
@@ -131,15 +113,6 @@ Copy-AsWindowsText (Join-Path $Root 'CHANGELOG.md') `
                    (Join-Path $Payload 'CHANGELOG.md') $false
 Copy-AsWindowsText (Join-Path $Root 'LICENSE') `
                    (Join-Path $Payload 'LICENSE') $false
-
-# 右クリック登録用の .reg は子フォルダにまとめる（誤ってダブルクリック
-# しにくくする意味もある）
-$RegDir = Join-Path $Payload 'registry'
-$null = New-Item -ItemType Directory -Path $RegDir -Force
-Copy-AsRegFile (Join-Path $Root 'packaging\registry\extrun-add.reg') `
-               (Join-Path $RegDir 'extrun-add.reg')
-Copy-AsRegFile (Join-Path $Root 'packaging\registry\extrun-remove.reg') `
-               (Join-Path $RegDir 'extrun-remove.reg')
 
 # --- zip 化 -----------------------------------------------------------
 # Compress-Archive は古い PowerShell だとパス区切りに \ を埋め込むことがあるため、

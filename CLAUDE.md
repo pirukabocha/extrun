@@ -39,10 +39,9 @@ extrun.exe --help              # 使い方
 .\packaging\build-release.ps1   # dist\extrun-<version>-win-x64.zip と .sha256
 ```
 
-テスト → リリースビルド → 組み立て → zip → SHA256 を通しで行う。バージョンは `cargo metadata` 経由で `Cargo.toml` から読むので、スクリプトにハードコードしない。zip の中身は `extrun-<version>/` の下に `extrun.exe` / `readme.txt`（`packaging/readme.txt` 由来。GitHub の `README.md` とは別物）/ `extrun-config.sample.txt`（`extrun-config.txt` をリネーム）/ `extrun-config-format.md` と `extrun-recipes.md`（`docs/` 由来。**zip の中ではフラットに並べる** — 2〜3 個のために展開した人にフォルダを掘らせない。両方が同じ階層に来るので、レシピ集から仕様書への相対リンクは GitHub 上でも zip の中でも通る）/ `CHANGELOG.md` / `registry/extrun-add.reg` と `registry/extrun-remove.reg`（`packaging/registry/` 由来）/ `LICENSE`。
+テスト → リリースビルド → 組み立て → zip → SHA256 を通しで行う。バージョンは `cargo metadata` 経由で `Cargo.toml` から読むので、スクリプトにハードコードしない。zip の中身は `extrun-<version>/` の下に `extrun.exe` / `readme.txt`（`packaging/readme.txt` 由来。GitHub の `README.md` とは別物）/ `extrun-config.sample.txt`（`extrun-config.txt` をリネーム）/ `extrun-config-format.md` と `extrun-recipes.md`（`docs/` 由来。**zip の中ではフラットに並べる** — 2〜3 個のために展開した人にフォルダを掘らせない。両方が同じ階層に来るので、レシピ集から仕様書への相対リンクは GitHub 上でも zip の中でも通る）/ `CHANGELOG.md` / `LICENSE`。
 
-- **`.reg` の文字コードは `.gitattributes` の `working-tree-encoding` が担う**。regedit は BOM で文字コードを判定し、BOM が無ければ ANSI と見なすので、UTF-8 のままだとメニュー名の日本語が文字化けする。`*.reg` に `working-tree-encoding=UTF-16LE-BOM` を指定してあるので、**リポジトリには UTF-8 + LF で格納され（差分も blame も GitHub の表示も読める）、作業ツリー・clone・`git archive` には UTF-16 LE + BOM + CRLF で出てくる**。clone した人がリポジトリ内の `.reg` をそのままコピーして使っても壊れない。作業ツリー側を UTF-8 で保存し直すと `git add` が「failed to encode」で止まるので、取り違えたまま進むことはない。`build-release.ps1` の `Copy-AsRegFile` は保険として残してある（Git を経由せず配布物を組む場合に効く）。
-
+- **右クリックメニューへの直接登録は勧めない方針**（1.2.0 で決定）。`shell\...\command` に `"%1"` を書く形式は選択されたファイルの数だけプロセスが起動し、`+`（まとめて渡す）が原理的に効かない。さらに `MultiSelectModel` 未指定＝`Document` 扱いのため、**16 個以上選ぶと項目自体がメニューから消える**。1 回の起動で全パスを受け取るには COM の DropTarget / ExecuteCommand ハンドラが要り、常駐しない設計とも `windows-sys` のみという方針とも両立しない。「送る」の SendTo ハンドラはその COM 実装なので制限を受けない。この判断により `.reg` の同梱と `--register` / `--unregister` の実装は取りやめ、`.gitattributes` の `working-tree-encoding` と `build-release.ps1` の `Copy-AsRegFile` も消えた。**「ExtRun はレジストリを書かない」という約束を保てるのもこの判断の効果**なので、右クリック登録を復活させる話が出たらここを読み直すこと。
 - **設定ファイルを `.sample.txt` にリネームして入れるのは意図的**。`extrun-config.txt` のまま同梱すると、更新版を同じフォルダに展開したユーザーの設定が上書きで消える。
 - **`LICENSE` の同梱は MIT の条件**（all copies に著作権表示を含める）なので外さない。
 - 同梱するファイルを増減するときは、ビルドスクリプトと `packaging/readme.txt` の「同梱ファイル」節の両方を直す。
