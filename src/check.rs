@@ -203,24 +203,43 @@ fn warn_unreachable_fields(item: &MenuItem, kind: &str, diags: &mut Vec<Diag>) {
             ),
         ));
     }
+
+    if item.wait {
+        diags.push(Diag::warning(
+            item.line,
+            format!(
+                "{}に :wait があります（実行されないので効きません）: {}",
+                kind, item.name
+            ),
+        ));
+    }
 }
 
-/// `+` の項目に `:delay` が付いていないか調べる
+/// `+` の項目に `:delay` や `:wait` が付いていないか調べる
 ///
 /// まとめて渡す項目は何個選んでも 1 プロセスしか起動しないので、起動と起動の
-/// あいだが存在しない。書いた側は間隔を空けたつもりでいるので、黙って捨てない。
+/// あいだが存在しない。間隔を空けるつもりでも、終了を待つつもりでも、待つ相手が
+/// いない。書いた側はそのつもりでいるので、黙って捨てない。
 fn warn_delay_on_all_mode(item: &MenuItem, diags: &mut Vec<Diag>) {
-    if !item.all_mode || item.delay.is_none() {
+    if !item.all_mode {
         return;
     }
 
-    diags.push(Diag::warning(
-        item.line,
-        format!(
-            "+ の項目に :delay があります（1 プロセスしか起動しないので効きません）: {}",
-            item.name
-        ),
-    ));
+    for keyword in [
+        item.delay.is_some().then_some(":delay"),
+        item.wait.then_some(":wait"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        diags.push(Diag::warning(
+            item.line,
+            format!(
+                "+ の項目に {} があります（1 プロセスしか起動しないので効きません）: {}",
+                keyword, item.name
+            ),
+        ));
+    }
 }
 
 /// 同じ階層でアクセスキーが重複していないか調べる
@@ -554,6 +573,56 @@ mod tests {
                 diags
                     .iter()
                     .any(|d| d.message.contains(":delay があります（実行されないので")),
+                "{}: {:?}",
+                text,
+                diags
+            );
+        }
+    }
+
+    /// `+` は 1 プロセスしか起動しないので、待つ相手がいない
+    #[test]
+    fn まとめて渡す項目の終了待ちを警告する() {
+        let diags = diags_of("[.txt]\n+ A | %SystemRoot%\\notepad.exe\n :wait");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("+ の項目に :wait があります")),
+            "{:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn まとめて渡さない項目の終了待ちは警告しない() {
+        let diags = diags_of("[.txt]\nA | %SystemRoot%\\notepad.exe\n :wait");
+        assert!(diags.is_empty(), "{:?}", diags);
+    }
+
+    /// `:delay` と `:wait` を両方書いた `+` の項目では、どちらも効かないので
+    /// 2 件とも知らせる（片方だけ消しても状況が変わらない）
+    #[test]
+    fn まとめて渡す項目では間隔と終了待ちの両方を警告する() {
+        let diags = diags_of("[.txt]\n+ A | %SystemRoot%\\notepad.exe\n :delay 300\n :wait");
+        let warnings: Vec<&str> = diags
+            .iter()
+            .filter(|d| d.message.contains("+ の項目に"))
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(warnings.len(), 2, "{:?}", warnings);
+    }
+
+    #[test]
+    fn 実行されない項目の終了待ちを警告する() {
+        for text in [
+            "[.txt]\n親\n :wait\n> 子 | %SystemRoot%\\notepad.exe",
+            "[.txt]\n---\n :wait",
+        ] {
+            let diags = diags_of(text);
+            assert!(
+                diags
+                    .iter()
+                    .any(|d| d.message.contains(":wait があります（実行されないので")),
                 "{}: {:?}",
                 text,
                 diags

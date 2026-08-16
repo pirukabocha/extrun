@@ -216,11 +216,14 @@ fn build_template(message: &str, problem: Option<&str>) -> Vec<u32> {
     let dialog_height = button_y + BUTTON_HEIGHT + MARGIN;
     let content_width = DIALOG_WIDTH - MARGIN * 2;
 
+    // 入力欄は答えるまでのあいだしか出ていないので、題名は素の「ExtRun」でよい
+    // （見分けが要るのは、待っているあいだ残り続ける進行状況ダイアログの方）
     push_header(
         &mut words,
         if problem.is_some() { 5 } else { 4 },
         DIALOG_WIDTH,
         dialog_height,
+        dialog::TITLE,
     );
 
     // --- 説明文 ---

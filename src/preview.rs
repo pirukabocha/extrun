@@ -127,6 +127,7 @@ const LABEL_ARG: &str = "引数　　　　";
 const LABEL_DIR: &str = "作業フォルダ";
 const LABEL_ADMIN: &str = "実行の権限　";
 const LABEL_DELAY: &str = "起動の間隔　";
+const LABEL_WAIT: &str = "起動の順番　";
 
 /// 1 項目から起動されるプロセスを書き出す
 ///
@@ -164,8 +165,9 @@ fn write_invocations(
     let invocations = resolve_invocations(item, targets, ctx);
     let total = invocations.len();
 
-    // 間隔も項目に対する設定なので、起動ごとの繰り返しの外に出す
-    write_delay(config.delay_of(item), total, out);
+    // 起動の順番と間隔も項目に対する設定なので、起動ごとの繰り返しの外に出す
+    write_wait(item.wait, total, out);
+    write_delay(config.delay_of(item), item.wait, total, out);
 
     for (index, invocation) in invocations.iter().enumerate() {
         // まとめて渡す項目は 1 回、そうでなければ対象の数だけ起動される
@@ -240,18 +242,45 @@ fn write_confirm(
     }
 }
 
+/// 1 つずつ終了を待って起動するか（`:wait`）を書き出す
+///
+/// 起動が 1 回で済むとき（対象が 1 つ、または `+`）は黙る。待つ相手がいないので
+/// 書いても効かず、`:delay` が同じ場合に黙るのと揃える（効かない指定そのものは
+/// `--check` の警告が拾う）。
+fn write_wait(wait: bool, total: usize, out: &mut String) {
+    if !wait || total < 2 {
+        return;
+    }
+
+    out.push_str(&format!(
+        "  {}  1 つずつ実行（:wait。前の 1 つが終了してから次を起動します。進行状況を表示します）\r\n",
+        LABEL_WAIT
+    ));
+}
+
 /// 起動の間隔と、進行状況を出すかどうかを書き出す
 ///
 /// 出すかどうかの判定は `menu::shows_progress` に任せる。ここで数え直すと、
 /// プレビューが「表示します」と言ったのに出ない設定が作れてしまう。
-fn write_delay(delay: u32, total: usize, out: &mut String) {
+///
+/// `:wait` と併記されているときは合計を出さない。終了までの時間は起動された
+/// 側に委ねられていて、ExtRun には分からないため。
+fn write_delay(delay: u32, wait: bool, total: usize, out: &mut String) {
     if delay == 0 || total < 2 {
+        return;
+    }
+
+    if wait {
+        out.push_str(&format!(
+            "  {}  {} ミリ秒（:wait で終了を待ったあと、さらにこれだけ空けます）\r\n",
+            LABEL_DELAY, delay
+        ));
         return;
     }
 
     let waits = total as u64 - 1;
     let seconds = (u64::from(delay) * waits) as f64 / 1000.0;
-    let progress = if crate::menu::shows_progress(delay, total) {
+    let progress = if crate::menu::shows_progress(wait, delay, total) {
         "進行状況を表示します"
     } else {
         "進行状況は表示しません"
@@ -541,6 +570,49 @@ mod tests {
         let 指定なし = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe");
         let text = report(&指定なし, &[target("a.txt"), target("b.txt")], &ctx());
         assert!(!text.contains("起動の間隔"), "{}", text);
+    }
+
+    /// `:wait` は待ち時間が事前に決まらないので、進行状況は必ず出る
+    #[test]
+    fn 終了を待つことと進行状況を出す() {
+        let config = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe\n :wait");
+        let text = report(&config, &[target("a.txt"), target("b.txt")], &ctx());
+
+        assert!(
+            text.contains("起動の順番　  1 つずつ実行（:wait"),
+            "{}",
+            text
+        );
+        assert!(text.contains("進行状況を表示します"), "{}", text);
+    }
+
+    /// 併記したときの `:delay` は「終了を待ったあと、さらに」。合計を書かないのは
+    /// 終了までの時間が起動された側に委ねられていて計算できないため
+    #[test]
+    fn 終了待ちと併記した間隔は合計を出さない() {
+        let config = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe\n :wait\n :delay 300");
+        let text = report(&config, &[target("a.txt"), target("b.txt")], &ctx());
+
+        assert!(
+            text.contains(
+                "起動の間隔　  300 ミリ秒（:wait で終了を待ったあと、さらにこれだけ空けます）"
+            ),
+            "{}",
+            text
+        );
+        assert!(!text.contains("合計およそ"), "{}", text);
+    }
+
+    /// 起動が 1 回で済むときは待つ相手がいない（`:delay` が黙るのと同じ）
+    #[test]
+    fn 終了待ちが効かないときは行を出さない() {
+        let config = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe\n :wait");
+        let text = report(&config, &[target("a.txt")], &ctx());
+        assert!(!text.contains("起動の順番"), "{}", text);
+
+        let まとめて = config_of("[.txt]\n+ 開く | C:\\Windows\\notepad.exe\n :wait");
+        let text = report(&まとめて, &[target("a.txt"), target("b.txt")], &ctx());
+        assert!(!text.contains("起動の順番"), "{}", text);
     }
 
     #[test]

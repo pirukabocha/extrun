@@ -26,6 +26,9 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Memory",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
+    # :wait で :admin のプロセスの終了を見るため（WaitForSingleObject）。
+    # 通常の起動は std の Child::try_wait で足りる
+    "Win32_System_Threading",
     # :admin の ShellExecuteExW 用（COM の初期化と SHELLEXECUTEINFOW の hkeyClass）
     "Win32_System_Com",
     "Win32_System_Registry",

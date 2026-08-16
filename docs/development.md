@@ -49,7 +49,7 @@ extrun/
 │   ├── placeholder.rs  # プレースホルダー置換と RunContext
 │   ├── datetime.rs     # $t{...} の書式解釈
 │   ├── prompt.rs       # $?{...} の入力ダイアログ
-│   ├── progress.rs     # :delay の進行状況ダイアログと中止後の要約
+│   ├── progress.rs     # :delay / :wait の進行状況ダイアログと中止後の要約
 │   ├── dialog.rs       # DLGTEMPLATE の組み立て（prompt.rs / progress.rs 共用）
 │   ├── icon.rs         # :icon のアイコン取り出し
 │   ├── check.rs        # --check の検証と整形
@@ -113,8 +113,9 @@ extrun-<version>/
 | `CreatePopupMenu` / `AppendMenuW` / `TrackPopupMenu` | メニューの構築と表示（`TPM_RETURNCMD` で同期的に選択結果を得る） |
 | `SetMenuItemInfoW`（`MIIM_BITMAP`） | 項目へのアイコン付与。`MF_OWNERDRAW` は使わない |
 | `SHDefExtractIconW` / `DrawIconEx` | `:icon` のアイコン取り出しと 32bpp DIB への描画 |
-| `DialogBoxIndirectParamW` | `$?{...}` の入力欄と `:delay` の進行状況（`DLGTEMPLATE` をメモリ上に手組み） |
-| `SetTimer` / `KillTimer` | `:delay` の待ち時間（ダイアログのモーダルループが汲む。`thread::sleep` では中止できない） |
+| `DialogBoxIndirectParamW` | `$?{...}` の入力欄と `:delay` / `:wait` の進行状況（`DLGTEMPLATE` をメモリ上に手組み） |
+| `SetTimer` / `KillTimer` | `:delay` の待ち時間と `:wait` の様子見（ダイアログのモーダルループが汲む。`thread::sleep` では中止できない） |
+| `WaitForSingleObject` / `SEE_MASK_NOCLOSEPROCESS` | `:wait` で `:admin` のプロセスの終了を見る（通常の起動は `std` の `Child::try_wait`） |
 | `SetClipboardData`（`CF_UNICODETEXT`） | 中止したときに残りのパスを渡す（ファイルは書き出さない） |
 | `MessageBoxW` | `:confirm` の確認とエラーダイアログ |
 | `GetLocalTime` | `$t{...}` の日時 |
@@ -128,7 +129,7 @@ extrun-<version>/
 
 ```powershell
 cargo test              # 通常のテスト
-cargo test -- --ignored # 実機でしか確かめられないもの（入力ダイアログの表示）
+cargo test -- --ignored --test-threads=1  # 実機でしか確かめられないもの（ダイアログの表示と :wait の逐次起動）
 ```
 
 テストコードは `cargo test` でのみコンパイルされ、リリースバイナリのサイズに影響しません。

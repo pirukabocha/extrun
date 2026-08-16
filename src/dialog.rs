@@ -66,14 +66,46 @@ pub const BUTTON_HEIGHT: i16 = 14;
 
 /// ダイアログの題名
 ///
-/// どのダイアログも同じ題名にする。タスクバーに出るときの名前でもあるので、
-/// 何のウィンドウなのかが分かる必要がある。
+/// 一瞬で消えるダイアログはこれをそのまま使う。タスクバーに出るときの名前でも
+/// あるので、何のウィンドウなのかが分かる必要がある。
 pub const TITLE: &str = "ExtRun";
+
+/// 題名に入れる項目名の上限（文字数）
+///
+/// タスクバーのボタンはこれよりずっと手前で切り詰められるので、長さの制限は
+/// 見た目のためではなく、題名が際限なく伸びないようにするためのもの。
+const MAX_TITLE_NAME: usize = 40;
+
+/// 項目名を添えた題名を組み立てる（`項目名 ― ExtRun`）
+///
+/// **長く出したままになるダイアログだけがこれを使う**（進行状況）。ExtRun を
+/// 2 つ動かしたときにタスクバーで見分けられないと困るのは、待っているあいだ
+/// 残り続けるウィンドウだけだから。
+///
+/// 項目名を**先**に置くのは、タスクバーのボタンが右から切り詰められるため。
+/// 区別に効くのは項目名の方で、「readme.txt - メモ帳」という Windows の
+/// 並べ方とも揃う。
+///
+/// `name` は `MenuItem::name`（表示用の文字列）をそのまま渡してよい。
+/// アクセスキーの `&` は含まれていない。
+pub fn title_for(name: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        return TITLE.to_string();
+    }
+
+    let mut shortened: String = name.chars().take(MAX_TITLE_NAME).collect();
+    if shortened.chars().count() < name.chars().count() {
+        shortened.push('…');
+    }
+
+    format!("{} ― {}", shortened, TITLE)
+}
 
 /// `DLGTEMPLATE` の見出しを書き込む
 ///
 /// 項目の数は先に確定させておく必要がある（あとから数えて書き戻せない位置にある）。
-pub fn push_header(words: &mut Vec<u16>, item_count: u16, width: i16, height: i16) {
+pub fn push_header(words: &mut Vec<u16>, item_count: u16, width: i16, height: i16, title: &str) {
     push_u32(words, STYLE_DIALOG);
     push_u32(words, 0); // 拡張スタイル
     words.push(item_count);
@@ -83,7 +115,7 @@ pub fn push_header(words: &mut Vec<u16>, item_count: u16, width: i16, height: i1
     push_i16(words, height);
     words.push(0); // メニューなし
     words.push(0); // 既定のウィンドウクラス
-    push_str(words, TITLE);
+    push_str(words, title);
     words.push(9); // フォントの大きさ
     push_str(words, "MS Shell Dlg");
 }
@@ -177,5 +209,41 @@ pub fn show_modal(template: &[u32], proc: DLGPROC, data: LPARAM) -> isize {
             proc,
             data,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 項目名が先。タスクバーのボタンは右から切り詰められるので、
+    /// 区別に効く方を左に置かないと 2 つ並んだときに見分けられない
+    #[test]
+    fn 題名は項目名が先で_extrun_が後ろ() {
+        assert_eq!(title_for("PNG に変換"), "PNG に変換 ― ExtRun");
+    }
+
+    /// 名前を持たない呼び出しでも「何のウィンドウか」は残す
+    #[test]
+    fn 名前が無ければ素の題名() {
+        assert_eq!(title_for(""), "ExtRun");
+        assert_eq!(title_for("   "), "ExtRun");
+    }
+
+    #[test]
+    fn 長い項目名は丸める() {
+        let 長い名前 = "あ".repeat(MAX_TITLE_NAME + 10);
+        let 題名 = title_for(&長い名前);
+
+        assert!(題名.starts_with(&"あ".repeat(MAX_TITLE_NAME)), "{}", 題名);
+        assert!(題名.contains('…'), "{}", 題名);
+        assert!(題名.ends_with(TITLE), "{}", 題名);
+    }
+
+    /// ちょうど上限の長さなら省略記号は付かない
+    #[test]
+    fn 上限ちょうどは丸めない() {
+        let 名前 = "あ".repeat(MAX_TITLE_NAME);
+        assert_eq!(title_for(&名前), format!("{} ― {}", 名前, TITLE));
     }
 }

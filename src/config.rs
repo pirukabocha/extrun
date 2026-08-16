@@ -96,6 +96,12 @@ pub struct MenuItem {
     /// 書かれた値をそのまま持ち、既定値との合成は `Config::delay_of` が行う
     /// （`[extrun]` はどこに書いてもよいので、項目を作る時点では確定しない）。
     pub delay: Option<u32>,
+    /// 直前のプロセスの終了を待ってから次を起動するか（`:wait`）
+    ///
+    /// `[extrun]` の既定値を持たないのは、`:delay` と違ってこれが「その項目を
+    /// どう使うか」の指定だから。全体に効かせると、複数選んだだけで ExtRun が
+    /// 終了を待ち続ける項目が意図せず増える。書いた項目でだけ効かせる。
+    pub wait: bool,
     /// 複数選択時にすべてまとめて 1 プロセスへ渡すか（`+`）
     pub all_mode: bool,
     /// サブメニューの子項目
@@ -807,6 +813,8 @@ struct ItemLine {
     delay: Option<(u32, String)>,
     /// `:admin`（値を取らないので行番号だけ）
     admin: Option<u32>,
+    /// `:wait`（値を取らないので行番号だけ）
+    wait: Option<u32>,
 }
 
 /// 行の種類
@@ -877,7 +885,10 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
         // 名前付きフィールド
         if let Some(rest) = trimmed.strip_prefix(':') {
             let (keyword, value) = split_keyword(rest);
-            if !matches!(keyword, "dir" | "confirm" | "icon" | "admin" | "delay") {
+            if !matches!(
+                keyword,
+                "dir" | "confirm" | "icon" | "admin" | "delay" | "wait"
+            ) {
                 diags.push(Diag::error(
                     line,
                     format!(": の後に未知のキーワードがあります: {}", keyword),
@@ -885,15 +896,16 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
                 continue;
             }
 
-            // `:admin` は付けるか付けないかだけ。`:admin yes` と書いて「no なら
-            // 付かない」と誤解されないよう、値があればエラーにする
-            if keyword == "admin" && !value.is_empty() {
+            // `:admin` と `:wait` は付けるか付けないかだけ。`:admin yes` と
+            // 書いて「no なら付かない」と誤解されないよう、値があればエラー。
+            //
+            // **`:wait` を同じ扱いにするのが肝心。** すぐ隣に `:delay 300` が
+            // あるので「`:wait 5000` で 5 秒まで待つ」と読まれかねず、黙って
+            // 受けると待ち方が変わらないまま気づけない
+            if matches!(keyword, "admin" | "wait") && !value.is_empty() {
                 diags.push(Diag::error(
                     line,
-                    format!(
-                        ":admin に値は書けません（:admin とだけ書きます）: {}",
-                        value
-                    ),
+                    format!(":{keyword} に値は書けません（:{keyword} とだけ書きます）: {value}"),
                 ));
                 continue;
             }
@@ -902,6 +914,10 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
                 Some(Stmt::Item(item)) => {
                     if keyword == "admin" {
                         item.admin = Some(line);
+                        continue;
+                    }
+                    if keyword == "wait" {
+                        item.wait = Some(line);
                         continue;
                     }
                     let field = match keyword {
@@ -947,6 +963,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
             icon: None,
             delay: None,
             admin: None,
+            wait: None,
         }));
     }
 
@@ -1051,6 +1068,8 @@ fn parse_setting(
         ("confirm", item.confirm.is_some()),
         ("icon", item.icon.is_some()),
         ("delay", item.delay.is_some()),
+        ("admin", item.admin.is_some()),
+        ("wait", item.wait.is_some()),
     ] {
         if present {
             diags.push(Diag::error(
@@ -1334,6 +1353,7 @@ fn build_item(
         icon,
         admin: source.admin.is_some(),
         delay,
+        wait: source.wait.is_some(),
         all_mode,
         submenu: Vec::new(),
         separator,
@@ -2905,5 +2925,86 @@ mod confirm_over_tests {
     fn ゼロなら常に確認する() {
         let config = config_of("[extrun]\nconfirm-over = 0\n[.txt]\nA | C:\\a.exe");
         assert_eq!(config.confirm_over_of(&config.apps[0], 1), Some(0));
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+
+    fn item_of(text: &str) -> MenuItem {
+        let parsed = parse(text);
+        let errors: Vec<&str> = parsed.errors().map(|d| d.message.as_str()).collect();
+        assert!(errors.is_empty(), "予期しないエラー: {:?}", errors);
+        parsed.config.apps.into_iter().next().expect("項目がある")
+    }
+
+    fn error_messages(text: &str) -> Vec<String> {
+        parse(text).errors().map(|d| d.message.clone()).collect()
+    }
+
+    #[test]
+    fn 指定がなければ待たない() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe");
+        assert!(!item.wait);
+    }
+
+    #[test]
+    fn 書けば待つ() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :wait");
+        assert!(item.wait);
+    }
+
+    /// **`:wait 5000` を黙って受けてはいけない。**
+    /// 隣に `:delay 300`（ミリ秒）があるので「5 秒まで待つ」と読まれかねず、
+    /// 受理すると待ち方が変わらないまま気づけない。`:admin` と同じ扱いにする
+    #[test]
+    fn 値を書いたらエラー() {
+        for text in [
+            "[.txt]\nA | C:\\a.exe\n :wait 5000",
+            "[.txt]\nA | C:\\a.exe\n :wait yes",
+        ] {
+            let messages = error_messages(text);
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m.contains(":wait に値は書けません")),
+                "{}: {:?}",
+                text,
+                messages
+            );
+        }
+    }
+
+    #[test]
+    fn 間隔と併記できる() {
+        let item = item_of("[.txt]\nA | C:\\a.exe\n :wait\n :delay 300");
+        assert!(item.wait, "終了を待つ");
+        assert_eq!(item.delay, Some(300), "そのうえでさらに空ける");
+    }
+
+    /// `:wait` は項目ごとの使い方の指定なので、全体の既定値を持たない
+    #[test]
+    fn 設定セクションには書けない() {
+        let messages = error_messages("[extrun]\ndelay = 100\n :wait");
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("[extrun] の中では :wait")),
+            "{:?}",
+            messages
+        );
+    }
+
+    #[test]
+    fn 設定セクションの管理者指定も断る() {
+        let messages = error_messages("[extrun]\ndelay = 100\n :admin");
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("[extrun] の中では :admin")),
+            "{:?}",
+            messages
+        );
     }
 }
