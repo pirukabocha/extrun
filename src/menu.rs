@@ -4,6 +4,7 @@
 
 use crate::config::{Config, IconMode, MenuItem, MenuPosition};
 use crate::placeholder::{PathPlaceholders, RunContext};
+use crate::progress;
 use crate::Target;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -13,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, Once};
+use std::time::Duration;
 use windows_sys::Win32::Foundation::{
     GetLastError, ERROR_CANCELLED, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
@@ -38,6 +40,8 @@ enum MenuAction {
     ExecuteApp {
         item: Box<MenuItem>,
         targets: Arc<Vec<Target>>,
+        /// 起動と起動の間隔（ミリ秒。`Config::delay_of` で解決済み）
+        delay: u32,
     },
     Close,
 }
@@ -145,6 +149,7 @@ pub fn create_and_show_menu(config: &Config, targets: &[Target]) {
         Arc::clone(&shared_targets),
         &state,
         &mut icons,
+        config,
     );
 
     // 閉じるメニューを追加
@@ -287,6 +292,7 @@ fn add_menu_items(
     targets: Arc<Vec<Target>>,
     state: &Arc<Mutex<GlobalState>>,
     icons: &mut IconCache,
+    config: &Config,
 ) {
     // 追加した順にそのまま並ぶので、繰り返しの番号がそのまま位置になる。
     // アイコンは位置で指定する（サブメニューの親には ID が無いため）
@@ -298,12 +304,20 @@ fn add_menu_items(
 
         if item.has_submenu() {
             let submenu = unsafe { CreatePopupMenu() };
-            add_menu_items(submenu, &item.submenu, Arc::clone(&targets), state, icons);
+            add_menu_items(
+                submenu,
+                &item.submenu,
+                Arc::clone(&targets),
+                state,
+                icons,
+                config,
+            );
             append_submenu(hmenu, submenu, &item.name, item.accesskey);
         } else {
             let id = state.lock().unwrap().add_action(MenuAction::ExecuteApp {
                 item: Box::new(item.clone()),
                 targets: Arc::clone(&targets),
+                delay: config.delay_of(item),
             });
             append_menu_item(hmenu, id, &item.name, item.accesskey);
         }
@@ -621,8 +635,12 @@ fn cleanup_separators(items: Vec<MenuItem>) -> Vec<MenuItem> {
 /// アクションを実行
 fn execute_action(action: MenuAction) {
     match action {
-        MenuAction::ExecuteApp { item, targets } => {
-            execute_command(&item, targets.as_slice());
+        MenuAction::ExecuteApp {
+            item,
+            targets,
+            delay,
+        } => {
+            execute_command(&item, targets.as_slice(), delay);
         }
         MenuAction::Close => {
             // 何もしない
@@ -735,8 +753,120 @@ fn all_mode_args(base_args: &[String], targets: &[Target], ctx: &RunContext) -> 
     final_args
 }
 
+/// 進行状況ダイアログを出す待ち時間の合計（ミリ秒）
+///
+/// これより短い待ちのためにダイアログが一瞬出て消えるほうが煩わしいので、
+/// 下回るときは黙って待つ。**判定は起動より前に確定する**ので、`--preview` に
+/// 「進行状況を表示します」と書ける。
+const PROGRESS_THRESHOLD_MS: u64 = 1_000;
+
+/// 起動の進み具合
+#[derive(Default)]
+struct Run {
+    /// 起動を試みた数（残りを数えるのに使う）
+    attempted: usize,
+    /// 実際に起動できた数
+    started: usize,
+    /// 起動できなかった理由
+    reasons: Vec<String>,
+    /// 進行状況を出していて、途中で止まったときの理由
+    interrupted: Option<progress::Outcome>,
+}
+
+/// 待ち時間の合計から、進行状況ダイアログを出すかどうかを決める
+pub fn shows_progress(delay: u32, total: usize) -> bool {
+    delay > 0 && total > 1 && u64::from(delay) * (total as u64 - 1) >= PROGRESS_THRESHOLD_MS
+}
+
+/// 組み立てたプロセスを順に起動する
+///
+/// `delay` が 0 なら間を空けずに起動する（`:delay` を書くまでの従来どおり）。
+/// 値があるときは起動と起動のあいだを空け、合計が長くなるときだけ進行状況を
+/// 見せる。**待ち時間の実体は進行状況ダイアログのモーダルループ**で、そちらを
+/// 使うときは `thread::sleep` を通らない（眠るとメッセージを汲めなくなる）。
+fn launch_all(name: &str, invocations: &[Invocation], delay: u32) -> Run {
+    let total = invocations.len();
+    let mut run = Run::default();
+
+    // 1 つぶんの起動。`false` を返すと以降を起動しない
+    let mut launch = |index: usize| -> bool {
+        run.attempted = index + 1;
+        let invocation = &invocations[index];
+
+        match spawn_command(
+            &invocation.program,
+            &invocation.args,
+            &invocation.working_dir,
+            invocation.admin,
+        ) {
+            Ok(Launch::Started) => {
+                run.started += 1;
+                true
+            }
+            // 昇格を断られたら、残りの対象も起動しない
+            Ok(Launch::Cancelled) => false,
+            // 起動できなかった理由は集めておいて、あとで 1 枚にまとめる
+            Err(reason) => {
+                run.reasons.push(reason);
+                true
+            }
+        }
+    };
+
+    let mut interrupted = None;
+
+    if shows_progress(delay, total) {
+        match progress::run(name, total, delay, &mut launch) {
+            progress::Outcome::Finished => {}
+            // ダイアログを出せなかったときは、せめて間隔だけは空けて起動する
+            progress::Outcome::Failed => launch_in_order(total, delay, &mut launch),
+            stopped => interrupted = Some(stopped),
+        }
+    } else {
+        launch_in_order(total, delay, &mut launch);
+    }
+
+    // ここから先で `launch` を使わないので、`run` の借用が外れる
+    run.interrupted = interrupted;
+    run
+}
+
+/// 間隔を空けながら順に起動する（進行状況は出さない）
+fn launch_in_order(total: usize, delay: u32, launch: &mut dyn FnMut(usize) -> bool) {
+    for index in 0..total {
+        // 待つのは起動と起動の「あいだ」。1 つ目は待たせない
+        if index > 0 && delay > 0 {
+            std::thread::sleep(Duration::from_millis(u64::from(delay)));
+        }
+
+        if !launch(index) {
+            break;
+        }
+    }
+}
+
+/// まだ起動していない対象のパス
+///
+/// `resolve_invocations` は個別実行のとき対象と同じ順・同じ個数を返すので、
+/// 起動を試みた数がそのまま境目になる。`+`（まとめて渡す）は 1 プロセスなので
+/// 間隔そのものが効かず、ここには来ない。
+fn remaining_paths(
+    targets: &[Target],
+    invocations: &[Invocation],
+    attempted: usize,
+) -> Vec<String> {
+    if invocations.len() != targets.len() {
+        return Vec::new();
+    }
+
+    targets[attempted.min(targets.len())..]
+        .iter()
+        .map(|target| target.path.to_string_lossy().to_string())
+        .collect()
+}
+
 /// コマンドを実行
-fn execute_command(item: &MenuItem, targets: &[Target]) {
+fn execute_command(item: &MenuItem, targets: &[Target], delay: u32) {
     if targets.is_empty() {
         return;
     }
@@ -772,23 +902,22 @@ fn execute_command(item: &MenuItem, targets: &[Target]) {
         return;
     }
 
-    // 個別実行では対象の数だけ同じ失敗が並ぶので、集めてから 1 枚だけ出す
-    let mut reasons: Vec<String> = Vec::new();
-    for invocation in resolve_invocations(item, targets, &ctx) {
-        match spawn_command(
-            &invocation.program,
-            &invocation.args,
-            &invocation.working_dir,
-            invocation.admin,
-        ) {
-            Ok(Launch::Started) => {}
-            // 昇格を断られたら、残りの対象も起動しない
-            Ok(Launch::Cancelled) => break,
-            Err(reason) => reasons.push(reason),
-        }
-    }
+    let invocations = resolve_invocations(item, targets, &ctx);
+    let run = launch_all(&item.name, &invocations, delay);
 
-    show_spawn_error(&exe_path, &reasons);
+    // 個別実行では対象の数だけ同じ失敗が並ぶので、集めてから 1 枚だけ出す
+    show_spawn_error(&exe_path, &run.reasons);
+
+    // 途中で止まったら、何を起動して何が残ったかを見せる。先に失敗を出すのは、
+    // 起動できた数の意味がそれを知らないと読み取れないため
+    if let Some(outcome) = run.interrupted {
+        progress::show_summary(
+            outcome,
+            run.started,
+            invocations.len(),
+            &remaining_paths(targets, &invocations, run.attempted),
+        );
+    }
 }
 
 /// 起動の結果（`Cancelled` は UAC を断られた場合）
@@ -1340,7 +1469,14 @@ mod tests {
         let hmenu = unsafe { CreatePopupMenu() };
         let mut icons = IconCache::new(mode, POINT { x: 0, y: 0 });
 
-        add_menu_items(hmenu, &items, Arc::new(targets), &state, &mut icons);
+        add_menu_items(
+            hmenu,
+            &items,
+            Arc::new(targets),
+            &state,
+            &mut icons,
+            &parsed.config,
+        );
 
         let found = (0..items.len())
             .map(|position| bitmap_at(hmenu, position as u32).is_some())
@@ -1497,5 +1633,71 @@ mod tests {
                 file_type
             );
         }
+    }
+
+    // -----------------------------------------------------------------
+    // 起動の間隔（:delay）
+
+    /// 短い待ちのためにダイアログが一瞬出て消えるのは煩わしいので、
+    /// 合計がしきい値に届いたときだけ出す
+    #[test]
+    fn 進行状況を出すかどうかは待ち時間の合計で決まる() {
+        assert!(!shows_progress(0, 20), "間隔が無ければ出さない");
+        assert!(!shows_progress(500, 1), "1 つだけなら待ちが無い");
+        assert!(!shows_progress(300, 3), "合計 600 ミリ秒では出さない");
+        assert!(shows_progress(500, 3), "合計 1 秒で出す");
+        assert!(shows_progress(300, 20), "合計 5.7 秒なら出す");
+    }
+
+    /// 待つのは起動と起動の「あいだ」なので、待ちの数は対象の数より 1 少ない
+    #[test]
+    fn しきい値はちょうど一秒から() {
+        assert!(!shows_progress(999, 2), "999 ミリ秒では出さない");
+        assert!(shows_progress(1000, 2), "1000 ミリ秒で出す");
+    }
+
+    fn 対象(paths: &[&str]) -> Vec<Target> {
+        paths
+            .iter()
+            .map(|path| Target {
+                file_type: ".txt".to_string(),
+                path: PathBuf::from(path),
+            })
+            .collect()
+    }
+
+    fn 起動(count: usize) -> Vec<Invocation> {
+        (0..count)
+            .map(|_| Invocation {
+                program: PathBuf::from("C:\\a.exe"),
+                args: Vec::new(),
+                working_dir: String::new(),
+                admin: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn 残りは起動を試みたところから後ろ() {
+        let targets = 対象(&["C:\\1.txt", "C:\\2.txt", "C:\\3.txt"]);
+        let invocations = 起動(3);
+
+        assert_eq!(
+            remaining_paths(&targets, &invocations, 1),
+            vec!["C:\\2.txt".to_string(), "C:\\3.txt".to_string()],
+            "1 つ起動したなら残りは 2 つ"
+        );
+        assert!(
+            remaining_paths(&targets, &invocations, 3).is_empty(),
+            "最後まで行けば残らない"
+        );
+    }
+
+    /// `+`（まとめて渡す）は 1 プロセスなので、対象と起動の数が食い違う。
+    /// 番号で対応づけられないので、残りは数えない
+    #[test]
+    fn まとめて渡すときは残りを数えない() {
+        let targets = 対象(&["C:\\1.txt", "C:\\2.txt", "C:\\3.txt"]);
+        assert!(remaining_paths(&targets, &起動(1), 0).is_empty());
     }
 }

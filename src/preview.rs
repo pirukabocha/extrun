@@ -63,7 +63,15 @@ fn report(config: &Config, targets: &[Target], ctx: &RunContext) -> String {
     }
 
     let mut count = 0;
-    write_items(&items, &mut Vec::new(), targets, ctx, &mut out, &mut count);
+    write_items(
+        &items,
+        &mut Vec::new(),
+        targets,
+        ctx,
+        config,
+        &mut out,
+        &mut count,
+    );
     out.push_str(&format!("\r\n{} 項目\r\n", count));
     out
 }
@@ -72,11 +80,13 @@ fn report(config: &Config, targets: &[Target], ctx: &RunContext) -> String {
 ///
 /// サブメニューの親は選んでも実行されないので、`親 > 子` の形で名前だけ引き継ぐ。
 /// セパレーターも実行の対象ではないので飛ばす。
+#[allow(clippy::too_many_arguments)]
 fn write_items(
     items: &[MenuItem],
     parents: &mut Vec<String>,
     targets: &[Target],
     ctx: &RunContext,
+    config: &Config,
     out: &mut String,
     count: &mut usize,
 ) {
@@ -87,7 +97,7 @@ fn write_items(
 
         if item.has_submenu() {
             parents.push(item.name.clone());
-            write_items(&item.submenu, parents, targets, ctx, out, count);
+            write_items(&item.submenu, parents, targets, ctx, config, out, count);
             parents.pop();
             continue;
         }
@@ -101,7 +111,7 @@ fn write_items(
         out.push_str(&item.name);
         out.push_str("\r\n");
 
-        write_invocations(item, targets, ctx, out);
+        write_invocations(item, targets, ctx, config, out);
     }
 }
 
@@ -116,12 +126,19 @@ const LABEL_PROGRAM: &str = "実行ファイル";
 const LABEL_ARG: &str = "引数　　　　";
 const LABEL_DIR: &str = "作業フォルダ";
 const LABEL_ADMIN: &str = "実行の権限　";
+const LABEL_DELAY: &str = "起動の間隔　";
 
 /// 1 項目から起動されるプロセスを書き出す
 ///
 /// 引数は 1 つ 1 行にする。空白で連結すると、PowerShell に渡す長い 1 引数と
 /// 複数の引数の区別がつかなくなる（引数の切れ目こそ確かめたいもの）。
-fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out: &mut String) {
+fn write_invocations(
+    item: &MenuItem,
+    targets: &[Target],
+    ctx: &RunContext,
+    config: &Config,
+    out: &mut String,
+) {
     if item.path.is_empty() {
         out.push_str("  （実行するパスがありません）\r\n");
         return;
@@ -153,6 +170,9 @@ fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out:
 
     let invocations = resolve_invocations(item, targets, ctx);
     let total = invocations.len();
+
+    // 間隔も項目に対する設定なので、起動ごとの繰り返しの外に出す
+    write_delay(config.delay_of(item), total, out);
 
     for (index, invocation) in invocations.iter().enumerate() {
         // まとめて渡す項目は 1 回、そうでなければ対象の数だけ起動される
@@ -191,6 +211,29 @@ fn write_invocations(item: &MenuItem, targets: &[Target], ctx: &RunContext, out:
             ));
         }
     }
+}
+
+/// 起動の間隔と、進行状況を出すかどうかを書き出す
+///
+/// 出すかどうかの判定は `menu::shows_progress` に任せる。ここで数え直すと、
+/// プレビューが「表示します」と言ったのに出ない設定が作れてしまう。
+fn write_delay(delay: u32, total: usize, out: &mut String) {
+    if delay == 0 || total < 2 {
+        return;
+    }
+
+    let waits = total as u64 - 1;
+    let seconds = (u64::from(delay) * waits) as f64 / 1000.0;
+    let progress = if crate::menu::shows_progress(delay, total) {
+        "進行状況を表示します"
+    } else {
+        "進行状況は表示しません"
+    };
+
+    out.push_str(&format!(
+        "  {}  {} ミリ秒（待ち {} 回で合計およそ {:.1} 秒。{}）\r\n",
+        LABEL_DELAY, delay, waits, seconds, progress
+    ));
 }
 
 /// `$?{...}` を一覧にし、以降の置換で使う値を決める
@@ -409,6 +452,47 @@ mod tests {
         let text = report(&config, &[target("a.txt")], &ctx());
 
         assert!(text.contains("引数　　　　  （なし）"), "{}", text);
+    }
+
+    /// 進行状況が出るかどうかは起動前に決まるので、プレビューで先に読める
+    #[test]
+    fn 起動の間隔と進行状況の有無を出す() {
+        let config = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe\n :delay 300");
+        let targets = [target("a.txt"), target("b.txt"), target("c.txt")];
+        let text = report(&config, &targets, &ctx());
+
+        assert!(
+            text.contains(
+                "起動の間隔　  300 ミリ秒（待ち 2 回で合計およそ 0.6 秒。進行状況は表示しません）"
+            ),
+            "{}",
+            text
+        );
+    }
+
+    #[test]
+    fn 待ちが長ければ進行状況を出すと書く() {
+        let config = config_of("[extrun]\ndelay = 500\n[.txt]\n開く | C:\\Windows\\notepad.exe");
+        let targets = [target("a.txt"), target("b.txt"), target("c.txt")];
+        let text = report(&config, &targets, &ctx());
+
+        assert!(
+            text.contains("合計およそ 1.0 秒。進行状況を表示します"),
+            "{}",
+            text
+        );
+    }
+
+    /// 待ちが起きない組み合わせで間隔の行を出すと、効くように読めてしまう
+    #[test]
+    fn 間隔が効かないときは行を出さない() {
+        let 一つだけ = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe\n :delay 300");
+        let text = report(&一つだけ, &[target("a.txt")], &ctx());
+        assert!(!text.contains("起動の間隔"), "{}", text);
+
+        let 指定なし = config_of("[.txt]\n開く | C:\\Windows\\notepad.exe");
+        let text = report(&指定なし, &[target("a.txt"), target("b.txt")], &ctx());
+        assert!(!text.contains("起動の間隔"), "{}", text);
     }
 
     #[test]

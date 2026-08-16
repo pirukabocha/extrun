@@ -14,6 +14,7 @@ mod icon;
 mod menu;
 mod placeholder;
 mod preview;
+mod progress;
 mod prompt;
 
 use config::{Config, MenuPosition};

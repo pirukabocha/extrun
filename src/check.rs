@@ -127,6 +127,7 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
         }
 
         warn_embedded_path_placeholder(item, diags);
+        warn_delay_on_all_mode(item, diags);
     }
 }
 
@@ -192,6 +193,34 @@ fn warn_unreachable_fields(item: &MenuItem, kind: &str, diags: &mut Vec<Diag>) {
             ),
         ));
     }
+
+    if item.delay.is_some() {
+        diags.push(Diag::warning(
+            item.line,
+            format!(
+                "{}に :delay があります（実行されないので効きません）: {}",
+                kind, item.name
+            ),
+        ));
+    }
+}
+
+/// `+` の項目に `:delay` が付いていないか調べる
+///
+/// まとめて渡す項目は何個選んでも 1 プロセスしか起動しないので、起動と起動の
+/// あいだが存在しない。書いた側は間隔を空けたつもりでいるので、黙って捨てない。
+fn warn_delay_on_all_mode(item: &MenuItem, diags: &mut Vec<Diag>) {
+    if !item.all_mode || item.delay.is_none() {
+        return;
+    }
+
+    diags.push(Diag::warning(
+        item.line,
+        format!(
+            "+ の項目に :delay があります（1 プロセスしか起動しないので効きません）: {}",
+            item.name
+        ),
+    ));
 }
 
 /// 同じ階層でアクセスキーが重複していないか調べる
@@ -493,5 +522,42 @@ mod tests {
     fn アクセスキーのない項目は重複しない() {
         let warnings = 重複の警告("[.txt]\nA | notepad.exe\nB | notepad.exe");
         assert!(warnings.is_empty(), "{:?}", warnings);
+    }
+
+    /// `+` は何個選んでも 1 プロセスなので、起動と起動のあいだが存在しない
+    #[test]
+    fn まとめて渡す項目の間隔を警告する() {
+        let diags = diags_of("[.txt]\n+ A | %SystemRoot%\\notepad.exe\n :delay 300");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("+ の項目に :delay があります")),
+            "{:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn まとめて渡さない項目の間隔は警告しない() {
+        let diags = diags_of("[.txt]\nA | %SystemRoot%\\notepad.exe\n :delay 300");
+        assert!(diags.is_empty(), "{:?}", diags);
+    }
+
+    #[test]
+    fn 実行されない項目の間隔を警告する() {
+        for text in [
+            "[.txt]\n親\n :delay 300\n> 子 | %SystemRoot%\\notepad.exe",
+            "[.txt]\n---\n :delay 300",
+        ] {
+            let diags = diags_of(text);
+            assert!(
+                diags
+                    .iter()
+                    .any(|d| d.message.contains(":delay があります（実行されないので")),
+                "{}: {:?}",
+                text,
+                diags
+            );
+        }
     }
 }

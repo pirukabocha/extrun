@@ -25,7 +25,7 @@ Windows 専用です。`menu.rs` / `console.rs` が `windows-sys` を無条件�
 
 ## 依存クレート
 
-- `windows-sys` — Windows API（メニュー・ダイアログ・アイコン・コンソール出力）
+- `windows-sys` — Windows API（メニュー・ダイアログ・アイコン・クリップボード・コンソール出力）
 
 **実行時の依存はこれだけです。** 設定ファイルのパーサも、日時の書式も、入力ダイアログも自前実装です。
 
@@ -49,6 +49,8 @@ extrun/
 │   ├── placeholder.rs  # プレースホルダー置換と RunContext
 │   ├── datetime.rs     # $t{...} の書式解釈
 │   ├── prompt.rs       # $?{...} の入力ダイアログ
+│   ├── progress.rs     # :delay の進行状況ダイアログと中止後の要約
+│   ├── dialog.rs       # DLGTEMPLATE の組み立て（prompt.rs / progress.rs 共用）
 │   ├── icon.rs         # :icon のアイコン取り出し
 │   ├── check.rs        # --check の検証と整形
 │   ├── preview.rs      # --preview の整形
@@ -111,7 +113,9 @@ extrun-<version>/
 | `CreatePopupMenu` / `AppendMenuW` / `TrackPopupMenu` | メニューの構築と表示（`TPM_RETURNCMD` で同期的に選択結果を得る） |
 | `SetMenuItemInfoW`（`MIIM_BITMAP`） | 項目へのアイコン付与。`MF_OWNERDRAW` は使わない |
 | `SHDefExtractIconW` / `DrawIconEx` | `:icon` のアイコン取り出しと 32bpp DIB への描画 |
-| `DialogBoxIndirectParamW` | `$?{...}` の入力ダイアログ（`DLGTEMPLATE` をメモリ上に手組み） |
+| `DialogBoxIndirectParamW` | `$?{...}` の入力欄と `:delay` の進行状況（`DLGTEMPLATE` をメモリ上に手組み） |
+| `SetTimer` / `KillTimer` | `:delay` の待ち時間（ダイアログのモーダルループが汲む。`thread::sleep` では中止できない） |
+| `SetClipboardData`（`CF_UNICODETEXT`） | 中止したときに残りのパスを渡す（ファイルは書き出さない） |
 | `MessageBoxW` | `:confirm` の確認とエラーダイアログ |
 | `GetLocalTime` | `$t{...}` の日時 |
 | `SetProcessDpiAwarenessContext` | Per-Monitor DPI Awareness V2 の宣言 |

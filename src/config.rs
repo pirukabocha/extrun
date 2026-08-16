@@ -91,6 +91,11 @@ pub struct MenuItem {
     /// 昇格はプロセスごとなので、個別実行では対象の数だけ UAC が出る。
     /// `+`（まとめて渡す）と組み合わせると 1 回で済む。
     pub admin: bool,
+    /// 起動と起動の間隔（`:delay`。ミリ秒。`None` なら `[extrun]` の `delay`）
+    ///
+    /// 書かれた値をそのまま持ち、既定値との合成は `Config::delay_of` が行う
+    /// （`[extrun]` はどこに書いてもよいので、項目を作る時点では確定しない）。
+    pub delay: Option<u32>,
     /// 複数選択時にすべてまとめて 1 プロセスへ渡すか（`+`）
     pub all_mode: bool,
     /// サブメニューの子項目
@@ -198,6 +203,34 @@ pub struct Settings {
     pub select_first: bool,
     /// アイコンを出すかどうか
     pub icons: IconMode,
+    /// `:delay` を書いていない項目の起動間隔（ミリ秒。既定は 0＝待たない）
+    pub delay: u32,
+}
+
+/// `:delay` と `[extrun]` の `delay` に書ける値（ミリ秒）
+///
+/// 下限が 10 なのは `SetTimer` がそれ未満を切り上げるため。書いた値と実際が
+/// 食い違わないように、書けない値にしてある。上限は書き間違いの歯止めで、
+/// これが無いと `:delay 500000` と書いた設定が 8 分間ぶら下がる。
+pub const MIN_DELAY_MS: u32 = 10;
+pub const MAX_DELAY_MS: u32 = 10_000;
+
+/// 起動間隔の値を読む（`0` は待たない）
+pub fn parse_delay(value: &str) -> Result<u32, String> {
+    let value = value.trim();
+    let invalid = || {
+        format!(
+            "値は 0、または {}〜{}（ミリ秒）で書きます: {}",
+            MIN_DELAY_MS, MAX_DELAY_MS, value
+        )
+    };
+
+    let number: u32 = value.parse().map_err(|_| invalid())?;
+    if number != 0 && !(MIN_DELAY_MS..=MAX_DELAY_MS).contains(&number) {
+        return Err(invalid());
+    }
+
+    Ok(number)
 }
 
 /// 設定ファイルの内容
@@ -226,6 +259,14 @@ impl Parsed {
 }
 
 impl Config {
+    /// 項目に効く起動の間隔（ミリ秒）
+    ///
+    /// `:delay` を書いていなければ `[extrun]` の `delay` を使う。**合成する場所を
+    /// ここ 1 か所に集める**（メニューとプレビューでずれると、プレビューが嘘をつく）。
+    pub fn delay_of(&self, item: &MenuItem) -> u32 {
+        item.delay.unwrap_or(self.settings.delay)
+    }
+
     /// 設定ファイルを読み込んでパースする
     ///
     /// 戻り値の `Err` はファイルが読めない・文字コードが不正といった
@@ -694,6 +735,8 @@ struct ItemLine {
     confirm: Option<(u32, String)>,
     /// `:icon`
     icon: Option<(u32, String)>,
+    /// `:delay`
+    delay: Option<(u32, String)>,
     /// `:admin`（値を取らないので行番号だけ）
     admin: Option<u32>,
 }
@@ -766,7 +809,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
         // 名前付きフィールド
         if let Some(rest) = trimmed.strip_prefix(':') {
             let (keyword, value) = split_keyword(rest);
-            if !matches!(keyword, "dir" | "confirm" | "icon" | "admin") {
+            if !matches!(keyword, "dir" | "confirm" | "icon" | "admin" | "delay") {
                 diags.push(Diag::error(
                     line,
                     format!(": の後に未知のキーワードがあります: {}", keyword),
@@ -796,6 +839,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
                     let field = match keyword {
                         "dir" => &mut item.working_dir,
                         "confirm" => &mut item.confirm,
+                        "delay" => &mut item.delay,
                         _ => &mut item.icon,
                     };
                     *field = Some((line, value.to_string()));
@@ -833,6 +877,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
             working_dir: None,
             confirm: None,
             icon: None,
+            delay: None,
             admin: None,
         }));
     }
@@ -937,6 +982,7 @@ fn parse_setting(
         ("dir", item.working_dir.is_some()),
         ("confirm", item.confirm.is_some()),
         ("icon", item.icon.is_some()),
+        ("delay", item.delay.is_some()),
     ] {
         if present {
             diags.push(Diag::error(
@@ -989,6 +1035,10 @@ fn parse_setting(
                 line,
                 format!("icons の値が不正です（none / specified / auto）: {}", value),
             )),
+        },
+        "delay" => match parse_delay(value) {
+            Ok(delay) => settings.delay = delay,
+            Err(reason) => diags.push(Diag::error(line, format!("delay の{}", reason))),
         },
         _ => {
             diags.push(Diag::error(
@@ -1160,6 +1210,19 @@ fn build_item(
         aliases.expand(value, *confirm_line, diags)
     });
 
+    // 起動の間隔（別名もエスケープも関わらない、ただの数）
+    let delay = source.delay.as_ref().and_then(|(delay_line, value)| {
+        match parse_delay(value) {
+            Ok(delay) => Some(delay),
+            Err(reason) => {
+                // 待たずに起動してしまうと「書いたのに効かない」になるので、
+                // 書式の誤りは警告ではなくエラーにしてメニューごと止める
+                diags.push(Diag::error(*delay_line, format!(":delay の{}", reason)));
+                None
+            }
+        }
+    });
+
     // アイコンはパスなので、実行ファイルと同じくここでエスケープまで解決する
     let icon = source.icon.as_ref().and_then(|(icon_line, value)| {
         warn_stray_caret(value, *icon_line, diags);
@@ -1198,6 +1261,7 @@ fn build_item(
         confirm,
         icon,
         admin: source.admin.is_some(),
+        delay,
         all_mode,
         submenu: Vec::new(),
         separator,
@@ -2516,5 +2580,153 @@ mod tests {
     fn 正しいエスケープは警告しない() {
         let warnings = warning_messages("[.txt]\n^+ A | C:\\a.exe | ^$p");
         assert!(warnings.is_empty(), "{:?}", warnings);
+    }
+}
+
+#[cfg(test)]
+mod delay_tests {
+    use super::*;
+
+    fn item_of(text: &str) -> MenuItem {
+        let parsed = parse(text);
+        let errors: Vec<&str> = parsed.errors().map(|d| d.message.as_str()).collect();
+        assert!(errors.is_empty(), "予期しないエラー: {:?}", errors);
+        parsed.config.apps.into_iter().next().expect("項目がある")
+    }
+
+    fn error_messages(text: &str) -> Vec<String> {
+        parse(text).errors().map(|d| d.message.clone()).collect()
+    }
+
+    #[test]
+    fn 指定がなければ間隔は書かれていない() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe");
+        assert_eq!(item.delay, None);
+    }
+
+    #[test]
+    fn 項目の間隔を読める() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :delay 300");
+        assert_eq!(item.delay, Some(300));
+    }
+
+    /// グローバルに間隔を書いた設定でも、項目側で打ち消せる必要がある
+    #[test]
+    fn ゼロを書ける() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :delay 0");
+        assert_eq!(item.delay, Some(0));
+    }
+
+    #[test]
+    fn 上限と下限は書ける() {
+        assert_eq!(
+            item_of("[.txt]\nA | C:\\a.exe\n :delay 10").delay,
+            Some(MIN_DELAY_MS)
+        );
+        assert_eq!(
+            item_of("[.txt]\nA | C:\\a.exe\n :delay 10000").delay,
+            Some(MAX_DELAY_MS)
+        );
+    }
+
+    /// `SetTimer` が切り上げてしまう値は、書いた値と実際が食い違うので受け付けない
+    #[test]
+    fn 下限未満はエラー() {
+        let messages = error_messages("[.txt]\nA | C:\\a.exe\n :delay 5");
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains(":delay の値は 0、または")),
+            "{:?}",
+            messages
+        );
+    }
+
+    /// 書き間違いで、無表示のまま延々と待ち続けるのを防ぐ
+    #[test]
+    fn 上限超えはエラー() {
+        let messages = error_messages("[.txt]\nA | C:\\a.exe\n :delay 500000");
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains(":delay の値は 0、または")),
+            "{:?}",
+            messages
+        );
+    }
+
+    #[test]
+    fn 数でない値はエラー() {
+        for value in ["300ms", "0.5", "-1", "", "いち"] {
+            let messages = error_messages(&format!("[.txt]\nA | C:\\a.exe\n :delay {}", value));
+            assert!(
+                messages.iter().any(|m| m.contains(":delay の値は")),
+                "{} を受け付けてしまった: {:?}",
+                value,
+                messages
+            );
+        }
+    }
+
+    #[test]
+    fn グローバルの既定を読める() {
+        let config = parse_ok_config("[extrun]\ndelay = 250");
+        assert_eq!(config.settings.delay, 250);
+    }
+
+    #[test]
+    fn グローバルの既定は書かなければゼロ() {
+        assert_eq!(Settings::default().delay, 0);
+    }
+
+    #[test]
+    fn グローバルの不正な値はエラー() {
+        let messages = error_messages("[extrun]\ndelay = 1");
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("delay の値は 0、または")),
+            "{:?}",
+            messages
+        );
+    }
+
+    /// `[extrun]` は `名前 = 値` の並び。名前付きフィールドの書き方はできない
+    #[test]
+    fn グローバル設定の中の名前付きフィールドはエラー() {
+        let messages = error_messages("[extrun]\ndelay = 100\n :delay 200");
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("[extrun] の中では :delay")),
+            "{:?}",
+            messages
+        );
+    }
+
+    /// 合成の規則。項目に書いてあればそれが勝ち、無ければグローバルに従う
+    #[test]
+    fn 項目の指定はグローバルより優先される() {
+        let config = parse_ok_config(
+            "[extrun]\ndelay = 250\n[.txt]\n既定 | C:\\a.exe\n個別 | C:\\a.exe\n :delay 30\n打消 | C:\\a.exe\n :delay 0",
+        );
+
+        assert_eq!(config.delay_of(&config.apps[0]), 250, "書かなければ既定");
+        assert_eq!(config.delay_of(&config.apps[1]), 30, "書けばそちらが勝つ");
+        assert_eq!(config.delay_of(&config.apps[2]), 0, "0 で既定を打ち消せる");
+    }
+
+    /// `[extrun]` はどこに書いてもよいので、項目より後ろにあっても効く
+    #[test]
+    fn グローバル設定は項目より後ろに書いても効く() {
+        let config = parse_ok_config("[.txt]\nA | C:\\a.exe\n[extrun]\ndelay = 500");
+        assert_eq!(config.delay_of(&config.apps[0]), 500);
+    }
+
+    fn parse_ok_config(text: &str) -> Config {
+        let parsed = parse(text);
+        let errors: Vec<&str> = parsed.errors().map(|d| d.message.as_str()).collect();
+        assert!(errors.is_empty(), "予期しないエラー: {:?}", errors);
+        parsed.config
     }
 }

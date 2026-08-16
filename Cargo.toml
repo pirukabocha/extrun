@@ -21,6 +21,9 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_System_Console",
     "Win32_System_IO",
+    # 中止したときに残りのパスをクリップボードへ渡すため（ファイルは書かない）
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
     # :admin の ShellExecuteExW 用（COM の初期化と SHELLEXECUTEINFOW の hkeyClass）
