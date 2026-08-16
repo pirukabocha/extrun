@@ -1,68 +1,29 @@
 /*!
 入力プロンプト `$?{...}` のダイアログ
 
-Win32 に「入力欄つきのダイアログを 1 行で出す」API は無い（`MessageBoxW` の
-入力版は存在しない）。ダイアログテンプレートをメモリ上に組み立てて
-`DialogBoxIndirectParamW` に渡すのが、余計なウィンドウ管理をせずに
-Enter / Esc / タブ移動が正しく効く唯一の方法。
-
-テンプレートの構造は次のとおり。**各項目は DWORD 境界から始める必要がある**ので、
-`u16` 単位で組み立てて奇数個のところに詰め物を入れる。
-
-```
-DLGTEMPLATE      style / exstyle / 項目数 / x y cx cy
-  0x0000         メニューなし
-  0x0000         既定のウィンドウクラス
-  "タイトル\0"
-  9 "MS Shell Dlg\0"      DS_SETFONT を付けたときだけ
-DLGITEMTEMPLATE  （DWORD 境界）style / exstyle / x y cx cy / ID
-  0xFFFF 0x00xx  組み込みクラスの atom
-  "文字列\0"
-  0x0000         生成データなし
-```
+テンプレートの組み立ては `dialog.rs` が担当する。ここが持つのは入力欄という
+ダイアログの中身と、`$?{...}` の書式の解釈。
 */
 
-use std::ffi::OsStr;
-use std::iter::once;
-use std::os::windows::ffi::OsStrExt;
-use std::ptr::null_mut;
+use crate::dialog::{
+    self, push_header, push_item, to_dword_buffer, to_wide, ATOM_BUTTON, ATOM_EDIT, ATOM_STATIC,
+    BUTTON_HEIGHT, BUTTON_WIDTH, MARGIN, STYLE_BUTTON, STYLE_DEFAULT_BUTTON, STYLE_EDIT,
+    STYLE_STATIC,
+};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-/// 組み込みコントロールのクラス atom
-const ATOM_BUTTON: u16 = 0x0080;
-const ATOM_EDIT: u16 = 0x0081;
-const ATOM_STATIC: u16 = 0x0082;
-
 /// `windows-sys` が `Win32_UI_Controls` を有効にしないと出さない定数
-///
-/// この 2 つのためだけにフィーチャーを増やすと、使わない API の定義まで抱える。
-const SS_LEFT: u32 = 0x0000_0000;
 const EM_SETSEL: u32 = 0x00B1;
-
-/// ウィンドウスタイル
-///
-/// `windows-sys` では `WS_*` が `u32` で `DS_*` / `ES_*` / `BS_*` が `i32` なので、
-/// ここで揃えておく。
-const STYLE_DIALOG: u32 =
-    (DS_MODALFRAME | DS_SETFONT | DS_CENTER) as u32 | WS_POPUP | WS_CAPTION | WS_SYSMENU;
-const STYLE_STATIC: u32 = WS_CHILD | WS_VISIBLE | SS_LEFT;
-const STYLE_EDIT: u32 = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32;
-const STYLE_OK: u32 = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32;
-const STYLE_CANCEL: u32 = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32;
 
 /// 入力欄のコントロール ID（`IDOK` = 1 / `IDCANCEL` = 2 と重ならない値）
 const ID_EDIT: u16 = 100;
 
 /// ダイアログの大きさ（ダイアログ単位。フォントに合わせて拡大縮小される）
 const DIALOG_WIDTH: i16 = 240;
-const MARGIN: i16 = 8;
 const MESSAGE_HEIGHT: i16 = 20;
 const ERROR_HEIGHT: i16 = 20;
 const EDIT_HEIGHT: i16 = 14;
-const BUTTON_WIDTH: i16 = 50;
-const BUTTON_HEIGHT: i16 = 14;
 
 /// ファイル名に使えない文字（Windows）
 const FORBIDDEN_NAME_CHARS: &str = "\\/:*?\"<>|";
@@ -220,15 +181,11 @@ fn show_dialog(message: &str, problem: Option<&str>, default_value: &str) -> Opt
         result: None,
     };
 
-    let selected = unsafe {
-        DialogBoxIndirectParamW(
-            GetModuleHandleW(null_mut()),
-            template.as_ptr() as *const DLGTEMPLATE,
-            null_mut(),
-            Some(dialog_proc),
-            &mut data as *mut PromptData as LPARAM,
-        )
-    };
+    let selected = dialog::show_modal(
+        &template,
+        Some(dialog_proc),
+        &mut data as *mut PromptData as LPARAM,
+    );
 
     // テンプレートの組み立てを誤ると -1 が返る。黙って None にすると
     // 「選んだのに何も起きない」になって原因が追えないので、理由を見せる
@@ -248,9 +205,6 @@ fn show_dialog(message: &str, problem: Option<&str>, default_value: &str) -> Opt
 }
 
 /// ダイアログテンプレートを組み立てる
-///
-/// 戻り値を `Vec<u32>` にしているのは、テンプレートの先頭が DWORD 境界に
-/// なければならないため（`Vec<u16>` では 2 バイト境界しか保証されない）。
 fn build_template(message: &str, problem: Option<&str>) -> Vec<u32> {
     let mut words: Vec<u16> = Vec::new();
 
@@ -262,19 +216,12 @@ fn build_template(message: &str, problem: Option<&str>) -> Vec<u32> {
     let dialog_height = button_y + BUTTON_HEIGHT + MARGIN;
     let content_width = DIALOG_WIDTH - MARGIN * 2;
 
-    // --- DLGTEMPLATE ---
-    push_u32(&mut words, STYLE_DIALOG);
-    push_u32(&mut words, 0); // 拡張スタイル
-    words.push(if problem.is_some() { 5 } else { 4 }); // 項目数
-    push_i16(&mut words, 0); // x（DS_CENTER で無視される）
-    push_i16(&mut words, 0); // y
-    push_i16(&mut words, DIALOG_WIDTH);
-    push_i16(&mut words, dialog_height);
-    words.push(0); // メニューなし
-    words.push(0); // 既定のウィンドウクラス
-    push_str(&mut words, "ExtRun");
-    words.push(9); // フォントの大きさ
-    push_str(&mut words, "MS Shell Dlg");
+    push_header(
+        &mut words,
+        if problem.is_some() { 5 } else { 4 },
+        DIALOG_WIDTH,
+        dialog_height,
+    );
 
     // --- 説明文 ---
     push_item(
@@ -320,7 +267,7 @@ fn build_template(message: &str, problem: Option<&str>) -> Vec<u32> {
     // --- OK / キャンセル ---
     push_item(
         &mut words,
-        STYLE_OK,
+        STYLE_DEFAULT_BUTTON,
         DIALOG_WIDTH - MARGIN - BUTTON_WIDTH * 2 - 4,
         button_y,
         BUTTON_WIDTH,
@@ -331,7 +278,7 @@ fn build_template(message: &str, problem: Option<&str>) -> Vec<u32> {
     );
     push_item(
         &mut words,
-        STYLE_CANCEL,
+        STYLE_BUTTON,
         DIALOG_WIDTH - MARGIN - BUTTON_WIDTH,
         button_y,
         BUTTON_WIDTH,
@@ -342,78 +289,6 @@ fn build_template(message: &str, problem: Option<&str>) -> Vec<u32> {
     );
 
     to_dword_buffer(&words)
-}
-
-/// 1 項目ぶんの `DLGITEMTEMPLATE` を書き込む
-#[allow(clippy::too_many_arguments)]
-fn push_item(
-    words: &mut Vec<u16>,
-    style: u32,
-    x: i16,
-    y: i16,
-    cx: i16,
-    cy: i16,
-    id: u16,
-    atom: u16,
-    text: &str,
-) {
-    align_dword(words);
-
-    push_u32(words, style);
-    push_u32(words, 0); // 拡張スタイル
-    push_i16(words, x);
-    push_i16(words, y);
-    push_i16(words, cx);
-    push_i16(words, cy);
-    words.push(id);
-
-    words.push(0xFFFF); // 続くのがクラス名ではなく atom であることの目印
-    words.push(atom);
-    push_str(words, text);
-
-    words.push(0); // 生成データなし
-}
-
-fn push_u32(words: &mut Vec<u16>, value: u32) {
-    words.push(value as u16);
-    words.push((value >> 16) as u16);
-}
-
-fn push_i16(words: &mut Vec<u16>, value: i16) {
-    words.push(value as u16);
-}
-
-/// NUL 終端の UTF-16 文字列を書き込む
-fn push_str(words: &mut Vec<u16>, text: &str) {
-    words.extend(text.encode_utf16());
-    words.push(0);
-}
-
-/// 次の DWORD 境界まで詰める
-fn align_dword(words: &mut Vec<u16>) {
-    if words.len() % 2 != 0 {
-        words.push(0);
-    }
-}
-
-/// `u16` の並びを DWORD 境界に載せ替える
-fn to_dword_buffer(words: &[u16]) -> Vec<u32> {
-    let mut buffer = vec![0u32; words.len().div_ceil(2)];
-
-    for (index, word) in words.iter().enumerate() {
-        let slot = &mut buffer[index / 2];
-        if index % 2 == 0 {
-            *slot |= *word as u32;
-        } else {
-            *slot |= (*word as u32) << 16;
-        }
-    }
-
-    buffer
-}
-
-fn to_wide(text: &str) -> Vec<u16> {
-    OsStr::new(text).encode_wide().chain(once(0)).collect()
 }
 
 /// ダイアログプロシージャ
@@ -678,6 +553,7 @@ pub fn prompts(text: &str) -> Vec<Prompt<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr::null_mut;
 
     /// 書かれた入力欄の元の文字列（`RunContext` の見出しになるもの）
     fn sources(text: &str) -> Vec<&str> {

@@ -9,6 +9,7 @@ mod check;
 mod config;
 mod console;
 mod datetime;
+mod dialog;
 mod icon;
 mod menu;
 mod placeholder;
