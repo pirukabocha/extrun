@@ -307,7 +307,7 @@ mod tests {
     /// CreateProcess はスクリプトを起動できないので、書いた時点で知らせる
     #[test]
     fn スクリプトを直接指定した項目を警告する() {
-        let diags = diags_of("[.txt]\nX | C:\\tools\\run.bat");
+        let diags = diags_of("[.txt]\nX | C:\\tools\\run.ps1");
         assert!(
             diags
                 .iter()
@@ -329,10 +329,32 @@ mod tests {
         );
     }
 
+    /// 標準ライブラリが `.bat` / `.cmd` だけを `cmd.exe /c` に差し替えるので、
+    /// この 2 つは直接書いても動く。警告してはいけない
+    #[test]
+    fn バッチファイルは警告しない() {
+        for path in [
+            "C:\\tools\\run.bat",
+            "C:\\tools\\run.cmd",
+            "C:\\tools\\RUN.BAT",
+        ] {
+            let diags = diags_of(&format!("[.txt]\nX | {}", path));
+            assert!(
+                !diags
+                    .iter()
+                    .any(|d| d.message.contains("スクリプトは直接起動できません")),
+                "{}: {:?}",
+                path,
+                diags
+            );
+        }
+    }
+
     #[test]
     fn インタプリタ経由なら警告しない() {
-        let diags =
-            diags_of("[.txt]\nX | C:\\Windows\\System32\\cmd.exe | /c C:\\tools\\run.bat $p");
+        let diags = diags_of(
+            "[.txt]\nX | C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe | -File C:\\tools\\run.ps1 $p",
+        );
         assert!(
             !diags
                 .iter()

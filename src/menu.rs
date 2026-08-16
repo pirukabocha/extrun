@@ -942,21 +942,32 @@ fn show_spawn_error(exe_path: &Path, reasons: &[String]) {
 /// 実行時のエラーダイアログと `--check` の警告で同じ文言を使う。句点は
 /// 付けない（`--check` は末尾にパスを続けるため）。
 pub const INTERPRETER_HINT: &str =
-    "スクリプトは直接起動できません。cmd.exe /c や powershell.exe -File を経由してください";
+    "スクリプトは直接起動できません。powershell.exe -File や wscript.exe を経由してください";
 
 /// `CreateProcess` が実行ファイルとして起動できない拡張子か
 ///
-/// `Command::spawn` は `CreateProcess` なので、バッチやスクリプトを直接は
-/// 起動できない（関連付けを見るのは `ShellExecute` の仕事）。実行時の失敗
-/// ダイアログと `--check` の警告が同じ判断をするよう、表はここ 1 か所に置く。
+/// `Command::spawn` は `CreateProcess` なので、関連付けを見て起動する
+/// スクリプトは直接扱えない（それは `ShellExecute` の仕事）。
+///
+/// **`.bat` と `.cmd` はこの表に入れない。** 標準ライブラリがこの 2 つだけを
+/// 特別扱いし、`CreateProcess` を呼ぶ前にプログラムを `cmd.exe /c` に
+/// 差し替えるため、実際には起動できる（`std::sys::process::windows` の
+/// `is_batch_file`）。ここに入れると、正しく動いている設定に `--check` が
+/// 誤った警告を出す。
+///
+/// `.ps1` を同じように自動で `powershell.exe` に差し替えることはしない。
+/// 実行ポリシーの既定が `Restricted` で、迂回するには `-ExecutionPolicy
+/// Bypass` を黙って付けるほかなく（しかもグループポリシーは迂回できない）、
+/// `powershell.exe` と `pwsh.exe` のどちらを指すかもウィンドウの出し方も
+/// 決められないため。ExtRun が代われない選択は利用者に残す。
+///
+/// 実行時の失敗ダイアログと `--check` の警告が同じ判断をするよう、表はここ
+/// 1 か所に置く。
 pub fn needs_interpreter(exe_path: &Path) -> bool {
     let Some(extension) = exe_path.extension().and_then(|ext| ext.to_str()) else {
         return false;
     };
-    matches!(
-        extension.to_lowercase().as_str(),
-        "bat" | "cmd" | "ps1" | "vbs" | "js"
-    )
+    matches!(extension.to_lowercase().as_str(), "ps1" | "vbs" | "js")
 }
 
 /// 項目の中に書かれた入力欄を、重複を除いて書かれた順に集める

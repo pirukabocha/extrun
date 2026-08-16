@@ -180,16 +180,34 @@ OK   -NoProfile -Command "Get-Item -LiteralPath '$p'"
 
 未定義の変数はそのまま残ります。`--check` に `実行ファイルが見つかりません: %LOCALAPDATA%\...` のように**展開されていない姿で出る**ので、綴りの間違いはそこで気づけます。
 
-### 2-7. `.bat` / `.cmd` / `.ps1` は直接起動できない
+### 2-7. `.bat` は直接書ける。`.ps1` はインタプリタ経由
 
-実行ファイル欄に指定できるのは `.exe` です。バッチやスクリプトを呼びたいときは、インタプリタ経由にします。
+**`.bat` と `.cmd` は実行ファイル欄に直接書けます。**
 
 ```
-バッチを実行 | @cmd        | /c C:\Tools\scripts\convert.bat $p
-PS1 を実行   | @powershell | -NoProfile -ExecutionPolicy Bypass -File C:\Tools\scripts\convert.ps1 -Path "$p"
+バッチを実行 | C:\Tools\scripts\convert.bat | $p
 ```
 
-`.bat` を直接書いた場合は、`--check` が警告します。気づかないまま実行しても、選んだ瞬間に「起動できませんでした」のダイアログが同じ案内を出します。
+ただしバッチの中では、**受け取った引数を必ず引用符で囲んでください**。
+
+```bat
+@echo off
+set "TARGET=%~1"        ← 良い
+echo %~1                ← 悪い
+```
+
+裸の `%~1` を使うと、`a&b.txt` のように `&` を含むファイル名でコマンドが途中で分断され、`a^b.txt` は `^` が消えて `ab.txt` になります。ExtRun ではなく `cmd.exe` の引数の扱いによるものなので、囲めば解決します。
+
+**`.ps1` / `.vbs` / `.js` は直接書けません。** インタプリタ経由にします。
+
+```
+PS1 を実行 | @powershell | -NoProfile -ExecutionPolicy Bypass -File C:\Tools\scripts\convert.ps1 -Path "$p"
+VBS を実行 | @sys\wscript.exe | C:\Tools\scripts\notify.vbs $p
+```
+
+`.ps1` を ExtRun が自動で `powershell.exe` に回すことはしていません。`.ps1` の実行は既定の Windows では実行ポリシーで禁じられていて、迂回するには `-ExecutionPolicy Bypass` が要ります。これを黙って付けると OS のセキュリティ設定をランチャーが勝手に迂回することになり、しかもグループポリシーで設定された環境では迂回できずに失敗します。`powershell.exe`（5.1）と `pwsh.exe`（7 以降）のどちらを使うか、ウィンドウを隠すか残すかも項目ごとに違うので、いずれも書く人が選べるようにしてあります。
+
+`.ps1` などを直接書いた場合は `--check` が警告します。気づかないまま実行しても、選んだ瞬間に「起動できませんでした」のダイアログが同じ案内を出します。
 
 ### 2-8. `+`（まとめて渡す）が向くもの・向かないもの
 
