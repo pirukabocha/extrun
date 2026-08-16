@@ -13,12 +13,12 @@
 書き方は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、
 バージョン番号は [セマンティック バージョニング](https://semver.org/lang/ja/) に従います。
 
-## [Unreleased]
+## [1.5.0] - 2026-08-16
 
 ### 追加
 
 - 名前付きフィールド **`:delay`** — 複数のファイルを選んだときに、1 つずつの起動のあいだへ待ち時間を入れる（ミリ秒）。`[extrun]` の **`delay`** に書けば、`:delay` を書いていない項目の既定値になる
-  - 値は `0`（待たない）か `10`〜`10000`。項目に書いた値が既定より優先され、`:delay 0` と書けば既定を打ち消せる
+  - 値は `0`（待たない。`off` とも書ける）か `10`〜`10000`。項目に書いた値が既定より優先され、`:delay 0` と書けば既定を打ち消せる
   - **同時に動くプロセスの数は減りません。**ずらして起動するだけで、しばらくすれば結局すべてが同時に動きます。効くのは、2 つ目以降を 1 つ目に渡す作りのアプリ（ビューアやエディタによくあります）で、同時に叩くと取りこぼされてしまう場合です。重い処理の負荷を抑えたいときは `+`（まとめて渡す）で受け側にまとめさせてください
   - `+` は何個選んでも 1 プロセスなので `:delay` は効かない。`--check` が警告する。実行されない項目（サブメニューの親・セパレーター）に付けた場合も警告する
   - `--preview` に「起動の間隔」の行が出る。待ち時間の合計と、進行状況を表示するかどうかが分かる
@@ -40,8 +40,7 @@
   confirm-over = off
   ```
 
-- `:confirm`・件数の確認・`:admin` の「UAC が N 回出ます」の知らせが重なるとき、**ダイアログを 1 枚にまとめる**ようになった。理由が複数あっても聞かれるのは 1 回
-- `:delay` と `[extrun]` の `delay` が、`0` に加えて **`off`** と書けるようになった（意味は `0` と同じ。`confirm-over` を無効にする語と揃えたいときのため）
+- `:confirm` と `:admin` の「UAC が N 回出ます」の知らせが重なるとき、**ダイアログを 1 枚にまとめる**ようになった。理由が複数あっても聞かれるのは 1 回
 
 ## [1.4.0] - 2026-08-16
 
@@ -185,6 +184,7 @@
 - `extrun-recipes.md` — ffmpeg / ImageMagick / IrfanView / 7-Zip / VS Code / VLC / Pandoc などの設定例集と、AutoHotkey から呼び出す例
 - `packaging/readme.txt` — 配布 zip に同梱する説明書
 
+[1.5.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.5.0
 [1.4.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.4.0
 [1.3.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.3.0
 [1.2.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.2.0
