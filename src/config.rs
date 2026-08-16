@@ -194,8 +194,9 @@ pub enum MenuPosition {
 
 /// アプリ全体のふるまい（`[extrun]` セクション）
 ///
-/// 既定値は 1.0.0 までのふるまいと同じ（カーソル位置・選択なし）。
-#[derive(Debug, Clone, Default)]
+/// 既定値は 1.0.0 までのふるまいと同じ（カーソル位置・選択なし）。ただし
+/// `confirm_over` だけは既定で有効側に倒してある（下の定数を参照）。
+#[derive(Debug, Clone)]
 pub struct Settings {
     /// メニューを表示する位置
     pub menu_position: MenuPosition,
@@ -205,7 +206,29 @@ pub struct Settings {
     pub icons: IconMode,
     /// `:delay` を書いていない項目の起動間隔（ミリ秒。既定は 0＝待たない）
     pub delay: u32,
+    /// 起動がこの数を超えるときに自動で確認する（`None` は確認しない）
+    pub confirm_over: Option<u32>,
 }
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            menu_position: MenuPosition::default(),
+            select_first: false,
+            icons: IconMode::default(),
+            delay: 0,
+            confirm_over: Some(DEFAULT_CONFIRM_OVER),
+        }
+    }
+}
+
+/// `confirm-over` の既定値（この数を超える起動で確認する）
+///
+/// **既定で有効にする**のは、この機能が守る相手が「件数を意識していない人」だから。
+/// 書いた人だけが守られる安全機能は、うっかりミスをまさに防ぎたい場面で効かない。
+/// 20 なのは、画像を 10〜20 枚まとめて個別に処理するのが日常的な使い方の範囲で、
+/// それを超える数の**個別起動**は意図して選んだ数でないことが多いため。
+pub const DEFAULT_CONFIRM_OVER: u32 = 20;
 
 /// `:delay` と `[extrun]` の `delay` に書ける値（ミリ秒）
 ///
@@ -215,12 +238,24 @@ pub struct Settings {
 pub const MIN_DELAY_MS: u32 = 10;
 pub const MAX_DELAY_MS: u32 = 10_000;
 
+/// 無効を表す値（`confirm-over` と `delay` で共有する）
+const OFF: &str = "off";
+
 /// 起動間隔の値を読む（`0` は待たない）
+///
+/// **`off` も 0 と同じ意味で受ける。** 時間の指定なので `0` で待たないことは
+/// 読めば分かるが、`confirm-over` は `off` でしか無効にできない（`0` は
+/// 「0 件を超えたら」＝常に確認、という別の意味になる）。無効にしたい人が
+/// 最初に書く語が設定ごとに違う、という状態を作らないために両方を受ける。
 pub fn parse_delay(value: &str) -> Result<u32, String> {
     let value = value.trim();
+    if value.eq_ignore_ascii_case(OFF) {
+        return Ok(0);
+    }
+
     let invalid = || {
         format!(
-            "値は 0、または {}〜{}（ミリ秒）で書きます: {}",
+            "値は 0（または off）、あるいは {}〜{}（ミリ秒）で書きます: {}",
             MIN_DELAY_MS, MAX_DELAY_MS, value
         )
     };
@@ -231,6 +266,22 @@ pub fn parse_delay(value: &str) -> Result<u32, String> {
     }
 
     Ok(number)
+}
+
+/// 自動で確認するしきい値を読む（`off` は確認しない）
+///
+/// `0` を無効の意味にはしない。「0 件を超えたら確認」＝常に確認、と読むのが
+/// 素直で、実際にその設定を望む人もいる。無効は `off` と書く。
+pub fn parse_confirm_over(value: &str) -> Result<Option<u32>, String> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case(OFF) {
+        return Ok(None);
+    }
+
+    value
+        .parse()
+        .map(Some)
+        .map_err(|_| format!("値は件数、または off で書きます: {}", value))
 }
 
 /// 設定ファイルの内容
@@ -265,6 +316,23 @@ impl Config {
     /// ここ 1 か所に集める**（メニューとプレビューでずれると、プレビューが嘘をつく）。
     pub fn delay_of(&self, item: &MenuItem) -> u32 {
         item.delay.unwrap_or(self.settings.delay)
+    }
+
+    /// 件数が多いので自動で確認するか（するなら本文に添えるしきい値）
+    ///
+    /// **数えるのは対象の数ではなく、起動するプロセスの数。** `+`（まとめて渡す）は
+    /// 何件選んでも 1 プロセスなので聞かない。実害（プロセスが並ぶ・ウィンドウが
+    /// 何十枚も開く）が出るのは起動の回数の方で、`menu::repeated_elevation` が
+    /// `all_mode` を除くのと同じ理由。
+    ///
+    /// 判定と、本文に出すしきい値の両方をここで返す。**判定をここ 1 か所に集める**
+    /// のは `delay_of` と同じ理由で、メニューと `--preview` でずれると
+    /// プレビューが嘘をつくため。
+    pub fn confirm_over_of(&self, item: &MenuItem, targets: usize) -> Option<u32> {
+        let threshold = self.settings.confirm_over?;
+        let launches = if item.all_mode { 1 } else { targets };
+
+        (launches as u64 > u64::from(threshold)).then_some(threshold)
     }
 
     /// 設定ファイルを読み込んでパースする
@@ -1039,6 +1107,10 @@ fn parse_setting(
         "delay" => match parse_delay(value) {
             Ok(delay) => settings.delay = delay,
             Err(reason) => diags.push(Diag::error(line, format!("delay の{}", reason))),
+        },
+        "confirm-over" => match parse_confirm_over(value) {
+            Ok(over) => settings.confirm_over = over,
+            Err(reason) => diags.push(Diag::error(line, format!("confirm-over の{}", reason))),
         },
         _ => {
             diags.push(Diag::error(
@@ -2617,6 +2689,16 @@ mod delay_tests {
         assert_eq!(item.delay, Some(0));
     }
 
+    /// `confirm-over` を無効にする語と揃えたい人のために、`off` も 0 として受ける
+    #[test]
+    fn オフと書いても待たない() {
+        let item = item_of("[.txt]\nA | C:\\Windows\\notepad.exe\n :delay off");
+        assert_eq!(item.delay, Some(0));
+
+        let config = parse_ok_config("[extrun]\ndelay = OFF");
+        assert_eq!(config.settings.delay, 0, "大文字小文字は問わない");
+    }
+
     #[test]
     fn 上限と下限は書ける() {
         assert_eq!(
@@ -2636,7 +2718,7 @@ mod delay_tests {
         assert!(
             messages
                 .iter()
-                .any(|m| m.contains(":delay の値は 0、または")),
+                .any(|m| m.contains(":delay の値は 0（または off）")),
             "{:?}",
             messages
         );
@@ -2649,7 +2731,7 @@ mod delay_tests {
         assert!(
             messages
                 .iter()
-                .any(|m| m.contains(":delay の値は 0、または")),
+                .any(|m| m.contains(":delay の値は 0（または off）")),
             "{:?}",
             messages
         );
@@ -2685,7 +2767,7 @@ mod delay_tests {
         assert!(
             messages
                 .iter()
-                .any(|m| m.contains("delay の値は 0、または")),
+                .any(|m| m.contains("delay の値は 0（または off）")),
             "{:?}",
             messages
         );
@@ -2728,5 +2810,100 @@ mod delay_tests {
         let errors: Vec<&str> = parsed.errors().map(|d| d.message.as_str()).collect();
         assert!(errors.is_empty(), "予期しないエラー: {:?}", errors);
         parsed.config
+    }
+}
+
+#[cfg(test)]
+mod confirm_over_tests {
+    use super::*;
+
+    fn config_of(text: &str) -> Config {
+        let parsed = parse(text);
+        let errors: Vec<&str> = parsed.errors().map(|d| d.message.as_str()).collect();
+        assert!(errors.is_empty(), "予期しないエラー: {:?}", errors);
+        parsed.config
+    }
+
+    fn error_messages(text: &str) -> Vec<String> {
+        parse(text).errors().map(|d| d.message.clone()).collect()
+    }
+
+    /// 書かない設定でも効く（守る相手は件数を意識していない人なので既定で有効）
+    #[test]
+    fn 既定のしきい値がある() {
+        assert_eq!(Settings::default().confirm_over, Some(DEFAULT_CONFIRM_OVER));
+    }
+
+    #[test]
+    fn しきい値を読める() {
+        let config = config_of("[extrun]\nconfirm-over = 50");
+        assert_eq!(config.settings.confirm_over, Some(50));
+    }
+
+    /// `0` は「0 件を超えたら」＝常に確認、という別の意味なので無効は `off`
+    #[test]
+    fn オフで無効にできる() {
+        assert_eq!(
+            config_of("[extrun]\nconfirm-over = off")
+                .settings
+                .confirm_over,
+            None
+        );
+        assert_eq!(
+            config_of("[extrun]\nconfirm-over = OFF")
+                .settings
+                .confirm_over,
+            None
+        );
+    }
+
+    #[test]
+    fn 数でもオフでもない値はエラー() {
+        for value in ["いくつか", "-1", "1.5", "no", ""] {
+            let messages = error_messages(&format!("[extrun]\nconfirm-over = {}", value));
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m.contains("confirm-over の値は件数、または off")),
+                "{} を受け付けてしまった: {:?}",
+                value,
+                messages
+            );
+        }
+    }
+
+    /// しきい値を「超えた」ときだけ確認する（ちょうどの数では出ない）
+    #[test]
+    fn 境界のちょうどでは確認しない() {
+        let config = config_of("[extrun]\nconfirm-over = 20\n[.txt]\nA | C:\\a.exe");
+        let item = &config.apps[0];
+
+        assert_eq!(config.confirm_over_of(item, 20), None, "ちょうどは出ない");
+        assert_eq!(
+            config.confirm_over_of(item, 21),
+            Some(20),
+            "超えたら本文に添えるしきい値が返る"
+        );
+    }
+
+    /// 実害が出るのは起動の回数の方。`+` は何件選んでも 1 プロセスなので聞かない
+    #[test]
+    fn まとめて渡す項目は件数が多くても確認しない() {
+        let config = config_of("[extrun]\nconfirm-over = 20\n[.txt]\n+ A | C:\\a.exe | $p");
+        assert!(config.apps[0].all_mode, "+ の項目である");
+        assert_eq!(config.confirm_over_of(&config.apps[0], 500), None);
+    }
+
+    #[test]
+    fn オフなら何件でも確認しない() {
+        let config = config_of("[extrun]\nconfirm-over = off\n[.txt]\nA | C:\\a.exe");
+        assert_eq!(config.confirm_over_of(&config.apps[0], 1000), None);
+    }
+
+    /// `0` は「0 件を超えたら」なので 1 件でも確認する（望む人がいる設定）
+    #[test]
+    fn ゼロなら常に確認する() {
+        let config = config_of("[extrun]\nconfirm-over = 0\n[.txt]\nA | C:\\a.exe");
+        assert_eq!(config.confirm_over_of(&config.apps[0], 1), Some(0));
     }
 }

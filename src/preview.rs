@@ -159,14 +159,7 @@ fn write_invocations(
     write_prompts(item, &base, ctx, out);
 
     // 確認は項目に対して 1 回なので、起動ごとの繰り返しの外に出す
-    if let Some(message) = &item.confirm {
-        let shown = if message.is_empty() {
-            "あり（メッセージなし）".to_string()
-        } else {
-            base.replace(message, ctx)
-        };
-        out.push_str(&format!("  {}  {}\r\n", LABEL_CONFIRM, shown));
-    }
+    write_confirm(item, targets, &base, ctx, config, out);
 
     let invocations = resolve_invocations(item, targets, ctx);
     let total = invocations.len();
@@ -210,6 +203,40 @@ fn write_invocations(
                 LABEL_ADMIN
             ));
         }
+    }
+}
+
+/// 実行前に確認が入るかどうかを書き出す
+///
+/// 件数による自動の確認を出すかどうかの判定は `Config::confirm_over_of` に任せる。
+/// ここで数え直すと、プレビューが「確認は出ません」と言ったのに出る設定が作れる。
+///
+/// `:confirm` と件数の両方が効くときは 2 行になる。まとめると、どちらが理由で
+/// 確認が出るのかが読み取れなくなる（片方を消したときの結果が変わる）。
+fn write_confirm(
+    item: &MenuItem,
+    targets: &[Target],
+    base: &PathPlaceholders,
+    ctx: &RunContext,
+    config: &Config,
+    out: &mut String,
+) {
+    if let Some(message) = &item.confirm {
+        let shown = if message.is_empty() {
+            "あり（メッセージなし）".to_string()
+        } else {
+            base.replace(message, ctx)
+        };
+        out.push_str(&format!("  {}  {}\r\n", LABEL_CONFIRM, shown));
+    }
+
+    if let Some(threshold) = config.confirm_over_of(item, targets.len()) {
+        out.push_str(&format!(
+            "  {}  対象が {} 件で confirm-over（{}）を超えるため確認します\r\n",
+            LABEL_CONFIRM,
+            targets.len(),
+            threshold
+        ));
     }
 }
 
@@ -359,6 +386,27 @@ mod tests {
         // :confirm を書いていない項目には行そのものが出ない
         let 確認なし = text.split("確認なし").nth(1).expect("確認なしの節がある");
         assert!(!確認なし.contains("実行前の確認"), "{}", 確認なし);
+    }
+
+    /// `:confirm` を書いていなくても件数で確認が入る。それも起動前に知りたい情報
+    #[test]
+    fn 件数による確認を出す() {
+        let config = config_of(
+            "[extrun]\nconfirm-over = 2\n[.txt]\n個別 | C:\\Windows\\notepad.exe\n+ まとめて | C:\\Windows\\notepad.exe | $p",
+        );
+        let text = report(
+            &config,
+            &[target("a.txt"), target("b.txt"), target("c.txt")],
+            &ctx(),
+        );
+
+        assert!(
+            text.contains("実行前の確認  対象が 3 件で confirm-over（2）を超えるため確認します"),
+            "{}",
+            text
+        );
+        // `+` は何件でも 1 プロセスなので出ない（出るのは個別の項目の 1 回だけ）
+        assert_eq!(text.matches("confirm-over").count(), 1, "{}", text);
     }
 
     /// 日時も解決済みで出る（書式を確かめるのはプレビューの主な用途のひとつ）
