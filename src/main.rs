@@ -7,10 +7,14 @@ ExtRun - ファイルやフォルダを素早く適切なアプリケーショ�
 
 mod check;
 mod config;
+mod confirm;
 mod console;
 mod datetime;
 mod dialog;
+mod filter;
 mod icon;
+mod invoke;
+mod launch;
 mod menu;
 mod placeholder;
 mod preview;

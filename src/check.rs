@@ -9,7 +9,6 @@
 
 use crate::config::{Config, Diag, MenuItem, Severity};
 use crate::console;
-use crate::menu;
 use std::path::Path;
 
 /// 設定ファイルを検証して結果を出力し、終了コードを返す
@@ -119,10 +118,10 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
         }
 
         // 起動を試みた時点でも同じ案内を出すが、書いた時点で気づけるほうが早い
-        if menu::needs_interpreter(path) {
+        if crate::launch::needs_interpreter(path) {
             diags.push(Diag::warning(
                 item.line,
-                format!("{}: {}", menu::INTERPRETER_HINT, item.path),
+                format!("{}: {}", crate::launch::INTERPRETER_HINT, item.path),
             ));
         }
 

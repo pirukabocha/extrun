@@ -18,16 +18,20 @@
 写し取る。
 */
 
+use crate::config::{IconMode, MenuItem};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::null_mut;
+use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, MonitorFromPoint, SelectObject,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
+    MONITOR_DEFAULTTONEAREST,
 };
+use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Shell::SHDefExtractIconW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DrawIconEx, DI_MASK, DI_NORMAL, HICON,
+    DestroyIcon, DrawIconEx, DI_MASK, DI_NORMAL, HICON, SM_CXSMICON,
 };
 
 /// アイコンをメニュー用のビットマップにする
@@ -277,5 +281,124 @@ mod tests {
     fn 大きさが不正なら何も返さない() {
         assert!(load(Path::new(ICON_SOURCE), 0, 0).is_none());
         assert!(load(Path::new(ICON_SOURCE), 0, -8).is_none());
+    }
+}
+
+/// アイコンの読み込みと使い回し
+///
+/// 設定ファイルは同じ実行ファイルを何度も指す（同梱サンプルでは 1 つの拡張子に
+/// 25 項目並ぶが、実行ファイルは数種類しかない）。パスと番号で覚えておけば、
+/// 実際に取り出すのは数回で済む。
+pub(crate) struct IconCache {
+    mode: IconMode,
+    /// アイコンの一辺（物理ピクセル）
+    size: i32,
+    loaded: Vec<(String, i32, Option<HBITMAP>)>,
+}
+
+impl IconCache {
+    pub(crate) fn new(mode: IconMode, point: POINT) -> Self {
+        IconCache {
+            mode,
+            size: if mode == IconMode::None {
+                0
+            } else {
+                icon_size(point)
+            },
+            loaded: Vec::new(),
+        }
+    }
+
+    /// 項目に付けるアイコン
+    pub(crate) fn bitmap_for(&mut self, item: &MenuItem) -> Option<HBITMAP> {
+        if self.mode == IconMode::None {
+            return None;
+        }
+
+        match &item.icon {
+            Some(spec) => self.load(&spec.path, spec.index),
+            // 指定が無い項目を実行ファイルから補うのは auto のときだけ
+            None if self.mode == IconMode::Auto && !item.path.is_empty() => {
+                self.load(&item.path, 0)
+            }
+            None => None,
+        }
+    }
+
+    /// 同じパスと番号なら 1 度しか読み込まない（読めなかったことも覚える）
+    fn load(&mut self, path: &str, index: i32) -> Option<HBITMAP> {
+        if let Some((_, _, bitmap)) = self
+            .loaded
+            .iter()
+            .find(|(cached, cached_index, _)| cached == path && *cached_index == index)
+        {
+            return *bitmap;
+        }
+
+        let bitmap = crate::icon::load(Path::new(path), index, self.size);
+        self.loaded.push((path.to_string(), index, bitmap));
+        bitmap
+    }
+
+    /// 読み込んだビットマップを解放する（メニューを壊したあとに呼ぶ）
+    pub(crate) fn dispose(&mut self) {
+        for (_, _, bitmap) in self.loaded.drain(..) {
+            if let Some(bitmap) = bitmap {
+                crate::icon::dispose(bitmap);
+            }
+        }
+    }
+}
+
+/// メニューに載せるアイコンの一辺（物理ピクセル）
+///
+/// Per-Monitor V2 ではメニューの文字も枠も自動で拡大されるが、**こちらが渡した
+/// ビットマップは拡大されない**。出す先のモニタの DPI を見て自分で決める。
+pub(crate) fn icon_size(point: POINT) -> i32 {
+    let mut dpi = 96;
+
+    let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
+    if !monitor.is_null() {
+        let mut dpi_x = 0;
+        let mut dpi_y = 0;
+        if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) } == 0 {
+            dpi = dpi_x;
+        }
+    }
+
+    unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    /// 同じパスと番号を何度書いても、取り出しは 1 回で済む
+    #[test]
+    fn 同じアイコンは使い回される() {
+        let mut icons = IconCache::new(IconMode::Specified, POINT { x: 0, y: 0 });
+        let path = "C:\\Windows\\System32\\imageres.dll";
+
+        let first = icons.load(path, 3);
+        let second = icons.load(path, 3);
+        assert!(first.is_some());
+        assert_eq!(first, second, "同じビットマップが返る");
+        assert_eq!(icons.loaded.len(), 1, "覚えているのは 1 件だけ");
+
+        // 番号が違えば別のアイコン
+        icons.load(path, 4);
+        assert_eq!(icons.loaded.len(), 2);
+
+        icons.dispose();
+    }
+
+    /// 読めなかったことも覚えるので、無いファイルを何度も叩かない
+    #[test]
+    fn 読めないアイコンも覚える() {
+        let mut icons = IconCache::new(IconMode::Specified, POINT { x: 0, y: 0 });
+        assert!(icons.load("C:\\無い\\無い.dll", 0).is_none());
+        assert!(icons.load("C:\\無い\\無い.dll", 0).is_none());
+        assert_eq!(icons.loaded.len(), 1);
+        icons.dispose();
     }
 }

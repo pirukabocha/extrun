@@ -5,13 +5,14 @@
 起動せずにコンソールへ書き出す。引数のエスケープとプレースホルダーが意図どおりに
 解決されているかを、プロセスを走らせずに確かめるための出力。
 
-コマンドラインの組み立ては `menu::resolve_invocations` に任せる。ここで組み立て
+コマンドラインの組み立ては `invoke::resolve_invocations` に任せる。ここで組み立て
 直すと、表示しているものと実際に起動されるものが静かにずれていく。
 */
 
 use crate::config::{Config, MenuItem};
 use crate::console;
-use crate::menu::{filter_menu_items, resolve_invocations};
+use crate::filter::filter_menu_items;
+use crate::invoke::resolve_invocations;
 use crate::placeholder::{PathPlaceholders, RunContext};
 use crate::Target;
 use std::path::Path;
@@ -260,7 +261,7 @@ fn write_wait(wait: bool, total: usize, out: &mut String) {
 
 /// 起動の間隔と、進行状況を出すかどうかを書き出す
 ///
-/// 出すかどうかの判定は `menu::shows_progress` に任せる。ここで数え直すと、
+/// 出すかどうかの判定は `launch::shows_progress` に任せる。ここで数え直すと、
 /// プレビューが「表示します」と言ったのに出ない設定が作れてしまう。
 ///
 /// `:wait` と併記されているときは合計を出さない。終了までの時間は起動された
@@ -280,7 +281,7 @@ fn write_delay(delay: u32, wait: bool, total: usize, out: &mut String) {
 
     let waits = total as u64 - 1;
     let seconds = (u64::from(delay) * waits) as f64 / 1000.0;
-    let progress = if crate::menu::shows_progress(wait, delay, total) {
+    let progress = if crate::launch::shows_progress(wait, delay, total) {
         "進行状況を表示します"
     } else {
         "進行状況は表示しません"
@@ -300,7 +301,7 @@ fn write_delay(delay: u32, wait: bool, total: usize, out: &mut String) {
 /// 項目ごとに入れ直すので、同じ `$?{...}` を別の項目にも書いてあれば
 /// どちらの行にも出る（`RunContext` の答えは項目をまたいで残るため）。
 fn write_prompts(item: &MenuItem, base: &PathPlaceholders, ctx: &RunContext, out: &mut String) {
-    for prompt in crate::menu::item_prompts(item) {
+    for prompt in crate::confirm::item_prompts(item) {
         let message = base.replace(prompt.message, ctx);
         let default_value = base.replace(prompt.default_value, ctx);
 
