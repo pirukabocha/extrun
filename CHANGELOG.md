@@ -13,7 +13,7 @@
 書き方は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、
 バージョン番号は [セマンティック バージョニング](https://semver.org/lang/ja/) に従います。
 
-## [Unreleased]
+## [1.7.0] - 2026-08-17
 
 ### 追加
 
