@@ -59,6 +59,39 @@ impl Diag {
     }
 }
 
+/// 選んだ数による出し分け（`:when`）
+///
+/// 拡張子と同じ「メニューに出すかどうか」の条件なので、フィルタで一緒に落ちる。
+/// **閉じた集合にしてある** — `:when 2` のように数を書けるようにすると、
+/// 「3 個以上」「2〜5 個」まで求められて際限がなくなる。実際に効くのは
+/// 「1 個だけか、そうでないか」の線引きで、それ以上の場面が具体的に無い。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum When {
+    /// 1 つだけ選んだときに出す（`:when single`）
+    Single,
+    /// 2 つ以上選んだときに出す（`:when multi`）
+    Multi,
+}
+
+impl When {
+    /// 語を解釈する（未知の語は `None`）
+    pub fn from_keyword(keyword: &str) -> Option<When> {
+        match keyword {
+            "single" => Some(When::Single),
+            "multi" => Some(When::Multi),
+            _ => None,
+        }
+    }
+
+    /// この数の対象で出すか
+    pub fn matches(&self, count: usize) -> bool {
+        match self {
+            When::Single => count == 1,
+            When::Multi => count >= 2,
+        }
+    }
+}
+
 /// メニュー項目
 #[derive(Debug, Clone, Default)]
 pub struct MenuItem {
@@ -101,6 +134,8 @@ pub struct MenuItem {
     /// どう使うか」の指定だから。全体に効かせると、複数選んだだけで ExtRun が
     /// 終了を待ち続ける項目が意図せず増える。書いた項目でだけ効かせる。
     pub wait: bool,
+    /// 選んだ数による出し分け（`:when`。`None` なら数を問わず出す）
+    pub when: Option<When>,
     /// 複数選択時にすべてまとめて 1 プロセスへ渡すか（`+`）
     pub all_mode: bool,
     /// サブメニューの子項目
@@ -599,6 +634,8 @@ struct ItemLine {
     admin: Option<u32>,
     /// `:wait`（値を取らないので行番号だけ）
     wait: Option<u32>,
+    /// `:when`（`single` / `multi`）
+    when: Option<(u32, String)>,
 }
 
 /// 行の種類
@@ -671,7 +708,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
             let (keyword, value) = split_keyword(rest);
             if !matches!(
                 keyword,
-                "dir" | "confirm" | "icon" | "admin" | "delay" | "wait"
+                "dir" | "confirm" | "icon" | "admin" | "delay" | "wait" | "when"
             ) {
                 diags.push(Diag::error(
                     line,
@@ -705,6 +742,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
                         "dir" => item.working_dir.as_ref().map(|(line, _)| *line),
                         "confirm" => item.confirm.as_ref().map(|(line, _)| *line),
                         "delay" => item.delay.as_ref().map(|(line, _)| *line),
+                        "when" => item.when.as_ref().map(|(line, _)| *line),
                         _ => item.icon.as_ref().map(|(line, _)| *line),
                     };
 
@@ -733,6 +771,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
                         "dir" => &mut item.working_dir,
                         "confirm" => &mut item.confirm,
                         "delay" => &mut item.delay,
+                        "when" => &mut item.when,
                         _ => &mut item.icon,
                     };
                     *field = Some((line, value.to_string()));
@@ -773,6 +812,7 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
             delay: None,
             admin: None,
             wait: None,
+            when: None,
         }));
     }
 
@@ -1133,6 +1173,21 @@ fn build_item(
         }
     });
 
+    // 選んだ数による出し分け。拡張子と同じ「出すかどうか」の条件なので、
+    // 書き間違いを黙って無視すると意図しない項目が並ぶ。エラーにする
+    let when = source.when.as_ref().and_then(|(when_line, value)| {
+        match When::from_keyword(value.trim()) {
+            Some(when) => Some(when),
+            None => {
+                diags.push(Diag::error(
+                    *when_line,
+                    format!(":when に書けるのは single か multi です: {}", value.trim()),
+                ));
+                None
+            }
+        }
+    });
+
     // アイコンはパスなので、実行ファイルと同じくここでエスケープまで解決する
     let icon = source.icon.as_ref().and_then(|(icon_line, value)| {
         warn_stray_caret(value, *icon_line, diags);
@@ -1183,6 +1238,7 @@ fn build_item(
         admin: source.admin.is_some(),
         delay,
         wait: source.wait.is_some(),
+        when,
         all_mode,
         submenu: Vec::new(),
         separator,
@@ -2172,6 +2228,25 @@ mod tests {
             "{:?}",
             errors
         );
+    }
+
+    /// 書き間違いを黙って無視すると、意図しない項目がメニューに並ぶ
+    #[test]
+    fn when_に書けるのは_single_か_multi_だけ() {
+        let errors = error_messages("[.txt]\nA | C:\\a.exe\n :when both");
+        assert!(
+            errors
+                .iter()
+                .any(|m| m.contains(":when に書けるのは single か multi です")),
+            "{:?}",
+            errors
+        );
+
+        let config = parse_ok("[.txt]\nA | C:\\a.exe\n :when single\nB | C:\\a.exe\n :when multi");
+        assert_eq!(config.apps[0].when, Some(When::Single));
+        assert_eq!(config.apps[1].when, Some(When::Multi));
+        // 書かなければ数を問わず出る
+        assert_eq!(parse_ok("[.txt]\nA | C:\\a.exe").apps[0].when, None);
     }
 
     /// 値の無い `:icon` がエラーなのと揃える

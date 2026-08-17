@@ -22,6 +22,8 @@ struct TargetInfo {
     has_folder: bool,
     has_non_folder: bool,
     file_types: HashSet<String>,
+    /// 選ばれた数（`:when` の判定に使う）
+    count: usize,
 }
 
 impl TargetInfo {
@@ -43,6 +45,7 @@ impl TargetInfo {
             has_folder,
             has_non_folder,
             file_types,
+            count: targets.len(),
         }
     }
 }
@@ -52,6 +55,15 @@ fn filter_with_info(apps: &[MenuItem], target_info: &TargetInfo) -> Vec<MenuItem
     let mut menu_items = Vec::with_capacity(apps.len());
 
     for app in apps {
+        // 選んだ数による出し分け（`:when`）。拡張子と同じ「出すかどうか」の
+        // 条件なので、サブメニューの親にもセパレーターにも同じように効く
+        if app
+            .when
+            .is_some_and(|when| !when.matches(target_info.count))
+        {
+            continue;
+        }
+
         if app.has_submenu() {
             // 子が 1 つも残らなかったサブメニューは丸ごと落とす
             let filtered_submenu = filter_with_info(&app.submenu, target_info);
@@ -200,6 +212,47 @@ mod tests {
         }
 
         assert!(mismatches.is_empty(), "項目数の不一致: {:#?}", mismatches);
+    }
+
+    /// 選んだ数による出し分け（`:when`）
+    #[test]
+    fn 選んだ数で項目を出し分ける() {
+        let config = parse(
+            "[.txt]\n\
+             いつでも | C:\\a.exe\n\
+             1 つのとき | C:\\a.exe\n :when single\n\
+             複数のとき | C:\\a.exe\n :when multi",
+        )
+        .config;
+
+        let names = |count: usize| -> Vec<String> {
+            let targets: Vec<Target> = (0..count).map(|_| target(".txt")).collect();
+            filter_menu_items(&config.apps, &targets)
+                .iter()
+                .map(|item| item.name.clone())
+                .collect()
+        };
+
+        assert_eq!(names(1), vec!["いつでも", "1 つのとき"]);
+        assert_eq!(names(2), vec!["いつでも", "複数のとき"]);
+        assert_eq!(names(9), vec!["いつでも", "複数のとき"]);
+    }
+
+    /// サブメニューの親に書けば中身ごと消える（拡張子と同じ扱い）
+    #[test]
+    fn サブメニューの親にも効く() {
+        let config = parse(
+            "[.txt]\n\
+             まとめ処理 | \n :when multi\n\
+             > 子 | C:\\a.exe",
+        )
+        .config;
+
+        assert!(filter_menu_items(&config.apps, &[target(".txt")]).is_empty());
+        assert_eq!(
+            filter_menu_items(&config.apps, &[target(".txt"), target(".txt")]).len(),
+            1
+        );
     }
 
     #[test]
