@@ -269,6 +269,28 @@ SHA256 を書き出す
  | @powershell
  | -NoProfile -Command "Get-FileHash -LiteralPath '$p' -Algorithm SHA256 ^| ForEach-Object { ^$_.Hash } ^| Set-Content -LiteralPath '$-p.sha256'"
 
+# $?list{} は打ち込むのではなく一覧から選ばせます。
+# = の右を , で区切ったものが選択肢で、先頭が最初から選ばれています。
+# 選べる値しか作れないので、入力の検証そのものが要りません。
+ハッシュ値を選んで書き出す
+ | @powershell
+ | -NoProfile -Command "Get-FileHash -LiteralPath '$p' -Algorithm $?list{アルゴリズム=SHA256,SHA1,MD5} ^| ForEach-Object { ^$_.Hash } ^| Set-Content -LiteralPath '$-p.hash'"
+
+# :when single は「1 つだけ選んだとき」に出す指定です。
+# 名前を 1 つずつ付け直す項目は、複数選んだときに出しても困るだけなので隠します。
+名前を変えて複製する
+ | @cmd
+ | /c copy "$p" "$d\$?name{新しい名前=$a}.$e"
+ :when single
+
+# :when multi は「2 つ以上選んだとき」だけ。
+# $i は何番目か、$c は選んだ総数。$i は総数の桁に合わせてゼロで埋まるので、
+# 10 個選べば 01〜10 になり、できたファイルの並び順が崩れません。
+連番を付けて複製する
+ | @cmd
+ | /c copy "$p" "$d\$a_$i.$e"
+ :when multi
+
 ---
 
 
