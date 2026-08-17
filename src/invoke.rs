@@ -91,7 +91,11 @@ fn resolve_working_dir(
 /// 引数がちょうど `$p` のところに全パスを展開する。`$p` がどこにも無ければ末尾に足す。
 fn all_mode_args(base_args: &[String], targets: &[Target], ctx: &RunContext) -> Vec<String> {
     let placeholder_count = base_args.iter().filter(|arg| arg.as_str() == "$p").count();
-    let has_path_placeholder = base_args.iter().any(|arg| arg.contains("$p"));
+    // エスケープを解する判定を使う。素の `contains("$p")` だと `^$path` のような
+    // 書き方を「`$p` がある」と誤解し、末尾へのパス追加を止めてしまう
+    let has_path_placeholder = base_args
+        .iter()
+        .any(|arg| crate::text::has_path_placeholder(arg));
     let extra_path_args = if has_path_placeholder {
         placeholder_count.saturating_mul(targets.len().saturating_sub(1))
     } else {
@@ -133,6 +137,24 @@ mod tests {
         let targets = vec![Target::from_path(PathBuf::from("C:\\x\\y.txt"))];
         let invocations = resolve_invocations(&config.apps[0], &targets, &RunContext::for_test());
         assert_eq!(invocations[0].working_dir, ".");
+    }
+
+    /// `^$path` を「`$p` がある」と誤解すると、末尾へのパス追加が止まり、
+    /// 対象がどこにも渡らないままコマンドが起動する（`--check` も黙っていた）
+    #[test]
+    fn エスケープした_p_があっても全パスは末尾に付く() {
+        let config = parse("[.txt]\n+ A | C:\\a.exe | -c ^$path").config;
+        let targets = vec![
+            Target::from_path(PathBuf::from("C:\\x\\1.txt")),
+            Target::from_path(PathBuf::from("C:\\x\\2.txt")),
+        ];
+        let invocations = resolve_invocations(&config.apps[0], &targets, &RunContext::for_test());
+
+        assert_eq!(invocations.len(), 1, "+ は 1 プロセス");
+        assert_eq!(
+            invocations[0].args,
+            vec!["-c", "$path", "C:\\x\\1.txt", "C:\\x\\2.txt"]
+        );
     }
 
     #[test]

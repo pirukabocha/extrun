@@ -276,7 +276,11 @@ fn warn_embedded_path_placeholder(item: &MenuItem, diags: &mut Vec<Diag>) {
         return;
     }
 
-    if item.args.iter().any(|arg| has_path_placeholder(arg)) {
+    if item
+        .args
+        .iter()
+        .any(|arg| crate::text::has_path_placeholder(arg))
+    {
         diags.push(Diag::warning(
             item.line,
             format!(
@@ -285,26 +289,6 @@ fn warn_embedded_path_placeholder(item: &MenuItem, diags: &mut Vec<Diag>) {
             ),
         ));
     }
-}
-
-/// エスケープされていない `$p` を含むか（`$-p` は別のプレースホルダーなので除く）
-fn has_path_placeholder(arg: &str) -> bool {
-    let bytes = arg.as_bytes();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        // `^$` はプレースホルダーではない
-        if bytes[i] == b'^' && i + 1 < bytes.len() {
-            i += 2;
-            continue;
-        }
-        if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'p') {
-            return true;
-        }
-        i += 1;
-    }
-
-    false
 }
 
 #[cfg(test)]

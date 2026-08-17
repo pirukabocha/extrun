@@ -224,6 +224,33 @@ pub(crate) fn unescape_name(text: &str) -> (String, Option<usize>) {
     (out, accesskey)
 }
 
+/// エスケープされていない `$p` を含むか（`$-p` は別のプレースホルダーなので除く）
+///
+/// **`--check` の警告（`check::warn_embedded_path_placeholder`）と、`+` の引数を
+/// 組み立てる `invoke::all_mode_args` の両方がこれを使う。** かつては後者だけが
+/// 素の `contains("$p")` で判定していて、`^$path` のようにエスケープした `$` を
+/// 書くと「`$p` がある」と誤解し、対象のパスがどこにも渡らないまま起動していた。
+/// しかも `--check` 側は正しく読めていたので警告も出なかった。判定を 2 か所に
+/// 分けると必ずこうなるので、ここ 1 か所に置く。
+pub(crate) fn has_path_placeholder(arg: &str) -> bool {
+    let bytes = arg.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // `^$` はプレースホルダーではない
+        if bytes[i] == b'^' && i + 1 < bytes.len() {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'p') {
+            return true;
+        }
+        i += 1;
+    }
+
+    false
+}
+
 /// 中括弧を開くプレースホルダー（`$t{` / `$?{` / `$?int{` …）の長さ
 fn placeholder_open_len(text: &str, i: usize) -> Option<usize> {
     if text.as_bytes()[i..].starts_with(b"$t{") {
@@ -264,6 +291,20 @@ pub(crate) fn split_args(text: &str) -> Vec<String> {
         match bytes[i] {
             b'"' => {
                 quoted = !quoted;
+                started = true;
+                i += 1;
+            }
+            // **中括弧の中でだけ、素の `{` も数える。** `$?{PowerShell の {0}}`
+            // のように説明へ中括弧を書いても対応が取れ、引数が途中で切れない。
+            // `prompt::find_close`（`$?{...}` の終端を探す側）はすべての `{` を
+            // 数えるので、ここで数えないと二者の見解が食い違い、「閉じられて
+            // いません」という見当違いのエラーになっていた。
+            //
+            // 深さ 0 では数えないままなので、PowerShell のスクリプトブロックが
+            // 引数をまたいで繋がることはない（下の「素の中括弧は数えない」）。
+            b'{' if braces > 0 => {
+                current.push('{');
+                braces += 1;
                 started = true;
                 i += 1;
             }
@@ -316,6 +357,28 @@ mod tests {
             split_args("$?{新しい名前=$a $t{yyyy MM}} -f"),
             vec!["$?{新しい名前=$a $t{yyyy MM}}", "-f"]
         );
+    }
+
+    /// 中括弧の中でだけ素の `{` も数える。`prompt::find_close`（終端を探す側）と
+    /// 数え方が食い違うと、引数が途中で切れたうえ「閉じられていません」という
+    /// 見当違いのエラーが出る
+    #[test]
+    fn 中括弧の中の素の中括弧も数える() {
+        assert_eq!(
+            split_args("$?{PowerShell の {0} 形式で} -f"),
+            vec!["$?{PowerShell の {0} 形式で}", "-f"]
+        );
+    }
+
+    /// `^$` はエスケープなのでプレースホルダーではない。ここを素の
+    /// `contains("$p")` で判定すると、`+` の項目でパスがどこにも渡らなくなる
+    #[test]
+    fn エスケープした_p_はプレースホルダーではない() {
+        assert!(has_path_placeholder("$p"));
+        assert!(has_path_placeholder("-i$p"));
+        assert!(!has_path_placeholder("^$path"));
+        // `$-p` は別のプレースホルダー
+        assert!(!has_path_placeholder("$-p"));
     }
 
     /// 素の `{` まで数えると、PowerShell のスクリプトブロックが繋がってしまう

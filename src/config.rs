@@ -1113,15 +1113,23 @@ fn build_item(
     });
 
     // 日時と入力欄の書式はここで検証する。書き間違えると誤った文字列が黙って
-    // ファイル名に入るので、警告ではなくエラーにしてメニューを止める
-    for text in args
-        .iter()
-        .chain(std::iter::once(&working_dir))
-        .chain(confirm.iter())
-    {
+    // ファイル名に入るので、警告ではなくエラーにしてメニューを止める。
+    //
+    // **行番号は欄ごとに持つ。** 引数は項目の行に書かれるが、`:dir` と
+    // `:confirm` は別の行に書けるので、項目の行で報告すると `--check` が
+    // 見当違いの行を指す（3 行目の誤りが「2 行目」と出る）。
+    let mut checked: Vec<(u32, &str)> = args.iter().map(|arg| (line, arg.as_str())).collect();
+    if let Some((dir_line, _)) = &source.working_dir {
+        checked.push((*dir_line, working_dir.as_str()));
+    }
+    if let (Some((confirm_line, _)), Some(text)) = (&source.confirm, confirm.as_deref()) {
+        checked.push((*confirm_line, text));
+    }
+
+    for (text_line, text) in checked {
         let problem = crate::datetime::validate(text).or_else(|| crate::prompt::validate(text));
         if let Some(message) = problem {
-            diags.push(Diag::error(line, message));
+            diags.push(Diag::error(text_line, message));
         }
     }
 
@@ -2103,6 +2111,15 @@ mod tests {
         let root = std::env::var("SystemRoot").expect("SystemRoot は必ずある");
         let config = parse_ok("[.txt]\nA | %systemroot%\\notepad.exe");
         assert_eq!(config.apps[0].path, format!("{}\\notepad.exe", root));
+    }
+
+    /// `:dir` と `:confirm` は項目とは別の行に書ける。書式の誤りを項目の行で
+    /// 報告すると、`--check` が見当違いの行を指してしまう
+    #[test]
+    fn 書式のエラーは書かれた行を指す() {
+        let parsed = parse("[.txt]\nA | C:\\a.exe\n :dir C:\\$t{zz}\n :confirm $t{qq} します");
+        let lines: Vec<u32> = parsed.errors().map(|d| d.line).collect();
+        assert_eq!(lines, vec![3, 4], "{:?}", parsed.diags);
     }
 
     /// 未定義ならそのまま残す（`--check` の「見つかりません」に展開前の姿が出る）
