@@ -1,11 +1,14 @@
 [package]
 name = "extrun"
 version = "1.6.0"
-edition = "2021"
-# 1.77.2 は `.bat` / `.cmd` を `cmd.exe /c` 経由で起動する際の引数の
-# エスケープが直った版（CVE-2024-24576）。設定ファイルにバッチを直接
-# 書ける前提はこの挙動に依存する
-rust-version = "1.77.2"
+edition = "2024"
+# edition 2024 を使うので 1.85.0 以上。**数字の理由はこれ 1 本**にしてある
+# （下げるなら edition を戻す話とセットになる）。
+#
+# なお `.bat` / `.cmd` を `cmd.exe /c` 経由で起動する際の引数のエスケープは
+# 1.77.2 で直っている（CVE-2024-24576）。設定ファイルにバッチを直接書ける
+# 前提はこの挙動に依存するので、下限がそれを下回ってはいけない。
+rust-version = "1.85.0"
 description = "拡張子に関連付けられたコンテキストメニューから、ファイルやフォルダを開く Windows 用ランチャー"
 repository = "https://github.com/pirukabocha/extrun"
 license = "MIT"

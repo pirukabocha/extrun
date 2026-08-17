@@ -4,7 +4,7 @@ ExtRun をソースからビルドする人と、手を入れる人のための�
 
 ## ビルド環境
 
-- Rust 2021 Edition（`rust-version = 1.77`）
+- Rust 2024 Edition（`rust-version = 1.85.0`）
 - Windows 11 / 10
 - Windows SDK の `rc.exe`（VERSIONINFO の埋め込みに使用。Visual Studio Build Tools を入れていれば揃っています）
 

@@ -9,12 +9,12 @@
 直すと、表示しているものと実際に起動されるものが静かにずれていく。
 */
 
+use crate::Target;
 use crate::config::{Config, MenuItem};
 use crate::console;
 use crate::filter::filter_menu_items;
 use crate::invoke::resolve_invocations;
 use crate::placeholder::{PathPlaceholders, RunContext};
-use crate::Target;
 use std::path::Path;
 
 /// 対象に対するメニューの内容を出力し、終了コードを返す

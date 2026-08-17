@@ -6,10 +6,10 @@
 確認の理由が重なっても、聞くのは 1 回で本文に理由を並べる。
 */
 
+use crate::Target;
 use crate::config::MenuItem;
 use crate::menu::to_wide_string;
 use crate::placeholder::{PathPlaceholders, RunContext};
-use crate::Target;
 use std::ptr::null_mut;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 /// 項目の中に書かれた入力欄を、重複を除いて書かれた順に集める

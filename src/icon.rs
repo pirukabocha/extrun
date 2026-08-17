@@ -24,14 +24,14 @@ use std::path::Path;
 use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, MonitorFromPoint, SelectObject,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
-    MONITOR_DEFAULTTONEAREST,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
+    DeleteDC, DeleteObject, HBITMAP, HGDIOBJ, MONITOR_DEFAULTTONEAREST, MonitorFromPoint,
+    SelectObject,
 };
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Shell::SHDefExtractIconW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DrawIconEx, DI_MASK, DI_NORMAL, HICON, SM_CXSMICON,
+    DI_MASK, DI_NORMAL, DestroyIcon, DrawIconEx, HICON, SM_CXSMICON,
 };
 
 /// アイコンをメニュー用のビットマップにする
@@ -176,7 +176,7 @@ fn apply_mask(icon: HICON, size: i32, pixels: &mut [u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows_sys::Win32::Graphics::Gdi::{GetDIBits, GetObjectW, BITMAP};
+    use windows_sys::Win32::Graphics::Gdi::{BITMAP, GetDIBits, GetObjectW};
 
     /// 素の Windows に必ずある、アイコンを持つファイル
     const ICON_SOURCE: &str = "C:\\Windows\\explorer.exe";

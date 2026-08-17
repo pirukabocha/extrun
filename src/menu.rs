@@ -2,6 +2,7 @@
 メニューの作成と表示 (Win32 API版)
 */
 
+use crate::Target;
 use crate::config::{Config, MenuItem, MenuPosition};
 use crate::confirm::{ask_prompts, confirm_execution};
 use crate::filter::filter_menu_items;
@@ -10,7 +11,6 @@ use crate::invoke::resolve_invocations;
 use crate::launch::{launch_all, remaining_paths, searched_on_path, show_spawn_error};
 use crate::placeholder::{PathPlaceholders, RunContext};
 use crate::progress;
-use crate::Target;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::iter::once;
@@ -20,12 +20,12 @@ use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HBITMAP, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+    GetMonitorInfoW, HBITMAP, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromPoint, MonitorFromWindow,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_DOWN,
+    INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_DOWN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -402,13 +402,15 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_TIMER && wparam == SELECT_FIRST_TIMER {
-        KillTimer(hwnd, SELECT_FIRST_TIMER);
-        send_key(VK_DOWN);
-        return 0;
-    }
+    unsafe {
+        if msg == WM_TIMER && wparam == SELECT_FIRST_TIMER {
+            KillTimer(hwnd, SELECT_FIRST_TIMER);
+            send_key(VK_DOWN);
+            return 0;
+        }
 
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
 }
 
 /// キーの押下と解放を 1 回ずつ送る
@@ -509,7 +511,7 @@ fn execute_command(item: &MenuItem, targets: &[Target], delay: u32, confirm_over
 pub(crate) fn show_error_dialog(title: &str, message: &str) {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
         unsafe {
             let title_wide = to_wide_string(title);

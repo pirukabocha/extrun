@@ -6,9 +6,9 @@
 */
 
 use crate::dialog::{
-    self, push_header, push_item, to_dword_buffer, to_wide, ATOM_BUTTON, ATOM_EDIT, ATOM_STATIC,
-    BUTTON_HEIGHT, BUTTON_WIDTH, MARGIN, STYLE_BUTTON, STYLE_DEFAULT_BUTTON, STYLE_EDIT,
-    STYLE_STATIC,
+    self, ATOM_BUTTON, ATOM_EDIT, ATOM_STATIC, BUTTON_HEIGHT, BUTTON_WIDTH, MARGIN, STYLE_BUTTON,
+    STYLE_DEFAULT_BUTTON, STYLE_EDIT, STYLE_STATIC, push_header, push_item, to_dword_buffer,
+    to_wide,
 };
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -304,57 +304,61 @@ unsafe extern "system" fn dialog_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    match msg {
-        WM_INITDIALOG => {
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
+    unsafe {
+        match msg {
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
 
-            let data = &*(lparam as *const PromptData);
-            SetDlgItemTextW(hwnd, ID_EDIT as i32, data.default_value.as_ptr());
-            // 既定値をすべて選択しておく。そのまま打てば置き換わり、
-            // Enter だけなら既定値がそのまま使われる
-            SendDlgItemMessageW(hwnd, ID_EDIT as i32, EM_SETSEL, 0, -1);
+                let data = &*(lparam as *const PromptData);
+                SetDlgItemTextW(hwnd, ID_EDIT as i32, data.default_value.as_ptr());
+                // 既定値をすべて選択しておく。そのまま打てば置き換わり、
+                // Enter だけなら既定値がそのまま使われる
+                SendDlgItemMessageW(hwnd, ID_EDIT as i32, EM_SETSEL, 0, -1);
 
-            1 // 最初のタブストップ（入力欄）にフォーカスを置く
-        }
-
-        WM_COMMAND => {
-            let control = (wparam & 0xFFFF) as i32;
-            if control != IDOK && control != IDCANCEL {
-                return 0;
+                1 // 最初のタブストップ（入力欄）にフォーカスを置く
             }
 
-            if control == IDOK {
-                let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut PromptData;
-                if !data.is_null() {
-                    (*data).result = Some(read_edit_text(hwnd));
+            WM_COMMAND => {
+                let control = (wparam & 0xFFFF) as i32;
+                if control != IDOK && control != IDCANCEL {
+                    return 0;
                 }
+
+                if control == IDOK {
+                    let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut PromptData;
+                    if !data.is_null() {
+                        (*data).result = Some(read_edit_text(hwnd));
+                    }
+                }
+
+                EndDialog(hwnd, control as isize);
+                1
             }
 
-            EndDialog(hwnd, control as isize);
-            1
+            _ => 0,
         }
-
-        _ => 0,
     }
 }
 
 /// 入力欄の内容を読み取る
 unsafe fn read_edit_text(hwnd: HWND) -> String {
-    let edit = GetDlgItem(hwnd, ID_EDIT as i32);
-    if edit.is_null() {
-        return String::new();
+    unsafe {
+        let edit = GetDlgItem(hwnd, ID_EDIT as i32);
+        if edit.is_null() {
+            return String::new();
+        }
+
+        // NUL の分を足して確保する
+        let length = GetWindowTextLengthW(edit);
+        if length <= 0 {
+            return String::new();
+        }
+
+        let mut buffer = vec![0u16; length as usize + 1];
+        let copied = GetWindowTextW(edit, buffer.as_mut_ptr(), buffer.len() as i32);
+
+        String::from_utf16_lossy(&buffer[..copied.max(0) as usize])
     }
-
-    // NUL の分を足して確保する
-    let length = GetWindowTextLengthW(edit);
-    if length <= 0 {
-        return String::new();
-    }
-
-    let mut buffer = vec![0u16; length as usize + 1];
-    let copied = GetWindowTextW(edit, buffer.as_mut_ptr(), buffer.len() as i32);
-
-    String::from_utf16_lossy(&buffer[..copied.max(0) as usize])
 }
 
 // =====================================================================

@@ -5,8 +5,8 @@
 見るだけでよい。フィルタで穴が空いたセパレーターの整理も合わせて行う。
 */
 
-use crate::config::MenuItem;
 use crate::Target;
+use crate::config::MenuItem;
 use std::collections::HashSet;
 /// メニュー項目をフィルタリング
 pub fn filter_menu_items(apps: &[MenuItem], targets: &[Target]) -> Vec<MenuItem> {
@@ -122,7 +122,7 @@ fn cleanup_separators(items: Vec<MenuItem>) -> Vec<MenuItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{parse, Config};
+    use crate::config::{Config, parse};
     use std::path::PathBuf;
     /// 実際の設定ファイルを読む（テスト用フィクスチャ兼サンプル）
     fn sample_config() -> Config {

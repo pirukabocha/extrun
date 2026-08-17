@@ -2148,7 +2148,9 @@ mod tests {
     /// エスケープの目印として食われないよう二重化しておく必要がある
     #[test]
     fn 作業フォルダに差し込む展開値のキャレットは二重化される() {
-        std::env::set_var("EXTRUN_TEST_CARET", "C:\\Foo^Bar");
+        // edition 2024 から `set_var` は unsafe。他のスレッドが環境変数を読んで
+        // いる最中だと壊れるためだが、このテストは自分で設定して自分で読むだけ
+        unsafe { std::env::set_var("EXTRUN_TEST_CARET", "C:\\Foo^Bar") };
         let config = parse_ok("[.txt]\nA | C:\\a.exe\n :dir %EXTRUN_TEST_CARET%\\sub");
         assert_eq!(config.apps[0].working_dir, "C:\\Foo^^Bar\\sub");
 

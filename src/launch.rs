@@ -6,22 +6,22 @@
 こちらは起動と終了の判定だけを持つ（組み立ては `invoke.rs` の 1 か所に集める）。
 */
 
+use crate::Target;
 use crate::invoke::Invocation;
 use crate::menu::{show_error_dialog, to_wide_string};
 use crate::progress;
-use crate::Target;
 use std::path::Path;
 use std::process::{Child, Command};
 use std::ptr::null_mut;
 use std::sync::Once;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_CANCELLED, HANDLE, WAIT_TIMEOUT,
+    CloseHandle, ERROR_CANCELLED, GetLastError, HANDLE, WAIT_TIMEOUT,
 };
-use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::UI::Shell::{
-    ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 /// 進行状況ダイアログを出す待ち時間の合計（ミリ秒）

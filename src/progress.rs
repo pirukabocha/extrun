@@ -28,8 +28,8 @@
 */
 
 use crate::dialog::{
-    self, push_header, push_item, to_dword_buffer, to_wide, ATOM_BUTTON, ATOM_STATIC,
-    BUTTON_HEIGHT, BUTTON_WIDTH, MARGIN, STYLE_BUTTON, STYLE_DEFAULT_BUTTON, STYLE_STATIC,
+    self, ATOM_BUTTON, ATOM_STATIC, BUTTON_HEIGHT, BUTTON_WIDTH, MARGIN, STYLE_BUTTON,
+    STYLE_DEFAULT_BUTTON, STYLE_STATIC, push_header, push_item, to_dword_buffer, to_wide,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -37,7 +37,7 @@ use windows_sys::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
-use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 /// クリップボードの書式（`windows-sys` が `Win32_System_Ole` を有効にしないと出さない）
@@ -92,7 +92,6 @@ pub enum Step {
     Stop,
 }
 
-/// ダイアログとやり取りする値
 /// 起動処理（`step`）の中にいるか
 ///
 /// `:admin` の起動は `ShellExecuteExW` に入り、**UAC の確認が出ているあいだに
@@ -106,6 +105,7 @@ pub enum Step {
 /// 厳密な順序付けは要らない（`Relaxed` で足りる）。
 static LAUNCHING: AtomicBool = AtomicBool::new(false);
 
+/// ダイアログとやり取りする値
 struct ProgressData<'a> {
     /// 見出しに出す項目の名前
     name: String,
@@ -297,92 +297,96 @@ unsafe extern "system" fn dialog_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    match msg {
-        WM_INITDIALOG => {
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
-            let data = &mut *(lparam as *mut ProgressData);
+    unsafe {
+        match msg {
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
+                let data = &mut *(lparam as *mut ProgressData);
 
-            let heading = if data.wait {
-                format!("{} を 1 つずつ実行しています", data.name)
-            } else {
-                format!("{} を起動しています", data.name)
-            };
-            set_text(hwnd, u16::MAX, &heading);
+                let heading = if data.wait {
+                    format!("{} を 1 つずつ実行しています", data.name)
+                } else {
+                    format!("{} を起動しています", data.name)
+                };
+                set_text(hwnd, u16::MAX, &heading);
 
-            // 1 つ目は待たずに起動する。押した直後に何も起きないと、選び直したく
-            // なって二重に起動される。待つのは起動と起動の「あいだ」
-            LAUNCHING.store(true, Ordering::Relaxed);
-            let again = step(hwnd, data);
-            LAUNCHING.store(false, Ordering::Relaxed);
+                // 1 つ目は待たずに起動する。押した直後に何も起きないと、選び直したく
+                // なって二重に起動される。待つのは起動と起動の「あいだ」
+                LAUNCHING.store(true, Ordering::Relaxed);
+                let again = step(hwnd, data);
+                LAUNCHING.store(false, Ordering::Relaxed);
 
-            if again {
-                SetTimer(hwnd, TIMER_ID, data.tick_ms(), None);
+                if again {
+                    SetTimer(hwnd, TIMER_ID, data.tick_ms(), None);
+                }
+
+                1
             }
 
-            1
-        }
-
-        WM_TIMER => {
-            if wparam != TIMER_ID {
-                return 0;
-            }
-            // 起動処理の途中に配送されたタイマーは捨てる。**`ProgressData` を
-            // 可変で借りるより前に確かめる**（借りたあとだと、同じデータへの
-            // 可変参照が 2 つ同時に存在することになる）
-            if LAUNCHING.load(Ordering::Relaxed) {
-                return 1;
-            }
-            if let Some(data) = data_of(hwnd) {
-                // `:wait` と `:delay` を併記したとき、終了を見てからさらに
-                // 空ける間隔。タイマーの間隔は様子見の周期なので別に数える
-                if data.resume_at.is_some_and(|at| Instant::now() < at) {
+            WM_TIMER => {
+                if wparam != TIMER_ID {
+                    return 0;
+                }
+                // 起動処理の途中に配送されたタイマーは捨てる。**`ProgressData` を
+                // 可変で借りるより前に確かめる**（借りたあとだと、同じデータへの
+                // 可変参照が 2 つ同時に存在することになる）
+                if LAUNCHING.load(Ordering::Relaxed) {
                     return 1;
                 }
-                LAUNCHING.store(true, Ordering::Relaxed);
-                step(hwnd, data);
-                LAUNCHING.store(false, Ordering::Relaxed);
-            }
-            1
-        }
-
-        WM_COMMAND => {
-            let control = (wparam & 0xFFFF) as u16;
-            let Some(data) = data_of(hwnd) else {
-                return 0;
-            };
-
-            match control {
-                ID_PAUSE => {
-                    toggle_pause(hwnd, data);
-                    1
+                if let Some(data) = data_of(hwnd) {
+                    // `:wait` と `:delay` を併記したとき、終了を見てからさらに
+                    // 空ける間隔。タイマーの間隔は様子見の周期なので別に数える
+                    if data.resume_at.is_some_and(|at| Instant::now() < at) {
+                        return 1;
+                    }
+                    LAUNCHING.store(true, Ordering::Relaxed);
+                    step(hwnd, data);
+                    LAUNCHING.store(false, Ordering::Relaxed);
                 }
-                id if id == IDCANCEL as u16 => {
-                    stop_timer(hwnd);
-                    EndDialog(hwnd, IDCANCEL as isize);
-                    1
-                }
-                _ => 0,
+                1
             }
-        }
 
-        // × で閉じたときも「以降の起動を取り消す」と同じ扱いにする
-        WM_CLOSE => {
-            stop_timer(hwnd);
-            EndDialog(hwnd, IDCANCEL as isize);
-            1
-        }
+            WM_COMMAND => {
+                let control = (wparam & 0xFFFF) as u16;
+                let Some(data) = data_of(hwnd) else {
+                    return 0;
+                };
 
-        _ => 0,
+                match control {
+                    ID_PAUSE => {
+                        toggle_pause(hwnd, data);
+                        1
+                    }
+                    id if id == IDCANCEL as u16 => {
+                        stop_timer(hwnd);
+                        EndDialog(hwnd, IDCANCEL as isize);
+                        1
+                    }
+                    _ => 0,
+                }
+            }
+
+            // × で閉じたときも「以降の起動を取り消す」と同じ扱いにする
+            WM_CLOSE => {
+                stop_timer(hwnd);
+                EndDialog(hwnd, IDCANCEL as isize);
+                1
+            }
+
+            _ => 0,
+        }
     }
 }
 
 /// `WM_INITDIALOG` で控えたポインタを取り出す
 unsafe fn data_of<'a>(hwnd: HWND) -> Option<&'a mut ProgressData<'a>> {
-    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressData;
-    if pointer.is_null() {
-        None
-    } else {
-        Some(&mut *pointer)
+    unsafe {
+        let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressData;
+        if pointer.is_null() {
+            None
+        } else {
+            Some(&mut *pointer)
+        }
     }
 }
 
@@ -391,34 +395,36 @@ unsafe fn data_of<'a>(hwnd: HWND) -> Option<&'a mut ProgressData<'a>> {
 /// `:wait` で直前のプロセスがまだ動いていれば、番号を進めずそのまま返る。
 /// 最後まで行ったか打ち切られたときは、ここでタイマーを止めてダイアログを閉じる。
 unsafe fn step(hwnd: HWND, data: &mut ProgressData) -> bool {
-    let index = data.next;
+    unsafe {
+        let index = data.next;
 
-    match (data.launch)(index) {
-        // まだ起動できない。次の鳴動でもう一度尋ねる
-        Step::Busy => {
-            update_status(hwnd, data);
-            return true;
+        match (data.launch)(index) {
+            // まだ起動できない。次の鳴動でもう一度尋ねる
+            Step::Busy => {
+                update_status(hwnd, data);
+                return true;
+            }
+            Step::Started => data.next = index + 1,
+            Step::Stop => {
+                data.next = index + 1;
+                data.stopped = true;
+            }
         }
-        Step::Started => data.next = index + 1,
-        Step::Stop => {
-            data.next = index + 1;
-            data.stopped = true;
+
+        update_status(hwnd, data);
+
+        if data.stopped || data.next >= data.total {
+            stop_timer(hwnd);
+            EndDialog(hwnd, IDOK as isize);
+            return false;
         }
+
+        // 起動できたので、`:delay` ぶんの間隔をここから数え直す
+        data.resume_at = (data.wait && data.delay > 0)
+            .then(|| Instant::now() + Duration::from_millis(u64::from(data.delay)));
+
+        true
     }
-
-    update_status(hwnd, data);
-
-    if data.stopped || data.next >= data.total {
-        stop_timer(hwnd);
-        EndDialog(hwnd, IDOK as isize);
-        return false;
-    }
-
-    // 起動できたので、`:delay` ぶんの間隔をここから数え直す
-    data.resume_at = (data.wait && data.delay > 0)
-        .then(|| Instant::now() + Duration::from_millis(u64::from(data.delay)));
-
-    true
 }
 
 /// 一時停止と再開を切り替える
@@ -426,48 +432,56 @@ unsafe fn step(hwnd: HWND, data: &mut ProgressData) -> bool {
 /// 再開したらすぐ次を起動する。間隔ぶん待たせると、押しても何も起きない時間が
 /// できて壊れているように見える。
 unsafe fn toggle_pause(hwnd: HWND, data: &mut ProgressData) {
-    data.paused = !data.paused;
+    unsafe {
+        data.paused = !data.paused;
 
-    if data.paused {
-        stop_timer(hwnd);
-        set_text(hwnd, ID_PAUSE, "再開");
-        update_status(hwnd, data);
-        return;
-    }
+        if data.paused {
+            stop_timer(hwnd);
+            set_text(hwnd, ID_PAUSE, "再開");
+            update_status(hwnd, data);
+            return;
+        }
 
-    set_text(hwnd, ID_PAUSE, "一時停止");
-    // 止めているあいだに `:delay` の分は過ぎたものとして扱う（押してから
-    // さらに待たされると、効いていないように見える）
-    data.resume_at = None;
-    if step(hwnd, data) {
-        SetTimer(hwnd, TIMER_ID, data.tick_ms(), None);
+        set_text(hwnd, ID_PAUSE, "一時停止");
+        // 止めているあいだに `:delay` の分は過ぎたものとして扱う（押してから
+        // さらに待たされると、効いていないように見える）
+        data.resume_at = None;
+        if step(hwnd, data) {
+            SetTimer(hwnd, TIMER_ID, data.tick_ms(), None);
+        }
     }
 }
 
 /// 進み具合の行を書き換える
 unsafe fn update_status(hwnd: HWND, data: &ProgressData) {
-    // 待っていることを言わないと、`:wait` では数字が止まって見える時間が長く、
-    // 進んでいるのか固まっているのかが読み取れない
-    let state = if data.paused {
-        "（一時停止中）"
-    } else if data.wait && data.next < data.total {
-        "（実行中のものが終わるのを待っています）"
-    } else {
-        ""
-    };
-    set_text(
-        hwnd,
-        ID_STATUS,
-        &format!("{} / {} を起動しました{}", data.next, data.total, state),
-    );
+    unsafe {
+        // 待っていることを言わないと、`:wait` では数字が止まって見える時間が長く、
+        // 進んでいるのか固まっているのかが読み取れない
+        let state = if data.paused {
+            "（一時停止中）"
+        } else if data.wait && data.next < data.total {
+            "（実行中のものが終わるのを待っています）"
+        } else {
+            ""
+        };
+        set_text(
+            hwnd,
+            ID_STATUS,
+            &format!("{} / {} を起動しました{}", data.next, data.total, state),
+        );
+    }
 }
 
 unsafe fn stop_timer(hwnd: HWND) {
-    KillTimer(hwnd, TIMER_ID);
+    unsafe {
+        KillTimer(hwnd, TIMER_ID);
+    }
 }
 
 unsafe fn set_text(hwnd: HWND, id: u16, text: &str) {
-    SetDlgItemTextW(hwnd, id as i32, to_wide(text).as_ptr());
+    unsafe {
+        SetDlgItemTextW(hwnd, id as i32, to_wide(text).as_ptr());
+    }
 }
 
 // =====================================================================
@@ -595,42 +609,44 @@ unsafe extern "system" fn summary_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    match msg {
-        WM_INITDIALOG => {
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
-            1
-        }
+    unsafe {
+        match msg {
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
+                1
+            }
 
-        WM_COMMAND => {
-            let control = (wparam & 0xFFFF) as u16;
+            WM_COMMAND => {
+                let control = (wparam & 0xFFFF) as u16;
 
-            if control == ID_COPY {
-                let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const SummaryData;
-                if !pointer.is_null() {
-                    let copied = copy_to_clipboard(hwnd, &(*pointer).paths);
-                    // 押した結果が見えないと、コピーされたのか分からない
-                    set_text(
-                        hwnd,
-                        ID_COPY,
-                        if copied {
-                            "コピーしました"
-                        } else {
-                            "コピーできませんでした"
-                        },
-                    );
+                if control == ID_COPY {
+                    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const SummaryData;
+                    if !pointer.is_null() {
+                        let copied = copy_to_clipboard(hwnd, &(*pointer).paths);
+                        // 押した結果が見えないと、コピーされたのか分からない
+                        set_text(
+                            hwnd,
+                            ID_COPY,
+                            if copied {
+                                "コピーしました"
+                            } else {
+                                "コピーできませんでした"
+                            },
+                        );
+                    }
+                    return 1;
                 }
-                return 1;
+
+                if control == IDOK as u16 || control == IDCANCEL as u16 {
+                    EndDialog(hwnd, control as isize);
+                    return 1;
+                }
+
+                0
             }
 
-            if control == IDOK as u16 || control == IDCANCEL as u16 {
-                EndDialog(hwnd, control as isize);
-                return 1;
-            }
-
-            0
+            _ => 0,
         }
-
-        _ => 0,
     }
 }
 
@@ -752,11 +768,7 @@ mod tests {
 
         // --- 起動の側から打ち切ると Stopped になる ---
         let mut 起動 = |index: usize| {
-            if index < 1 {
-                Step::Started
-            } else {
-                Step::Stop
-            }
+            if index < 1 { Step::Started } else { Step::Stop }
         };
         assert_eq!(
             run("テスト", 10, 10, false, &mut 起動),

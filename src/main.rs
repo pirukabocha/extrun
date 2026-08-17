@@ -26,7 +26,7 @@ use config::{Config, MenuPosition};
 use std::env;
 use std::path::PathBuf;
 use windows_sys::Win32::UI::HiDpi::{
-    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 
 /// 表示するエラー行数の上限（設定が壊れているときにダイアログが巨大化しないように）
@@ -402,7 +402,7 @@ pub fn show_error_dialog(title: &str, message: &str) {
     use std::iter::once;
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::null_mut;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
 
     let title_wide: Vec<u16> = OsStr::new(title).encode_wide().chain(once(0)).collect();
     let message_wide: Vec<u16> = OsStr::new(message).encode_wide().chain(once(0)).collect();

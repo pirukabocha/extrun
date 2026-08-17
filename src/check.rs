@@ -18,11 +18,7 @@ use std::path::Path;
 pub fn run(config_path: &Path) -> i32 {
     let report = report(config_path);
     console::print(&report.text);
-    if report.has_error {
-        1
-    } else {
-        0
-    }
+    if report.has_error { 1 } else { 0 }
 }
 
 /// 検証結果
@@ -44,7 +40,7 @@ fn report(config_path: &Path) -> Report {
             return Report {
                 text: format!("{}\r\n", message.replace('\n', "\r\n")),
                 has_error: true,
-            }
+            };
         }
     };
 
@@ -326,9 +322,11 @@ mod tests {
     #[test]
     fn パスのない項目を警告する() {
         let diags = diags_of("[.txt]\nパスなし");
-        assert!(diags
-            .iter()
-            .any(|d| d.message.contains("実行するパスがありません")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("実行するパスがありません"))
+        );
     }
 
     /// パスの先頭に書いた変数の綴りを間違えると、展開されないまま残る。
@@ -422,7 +420,9 @@ mod tests {
             親
         );
 
-        let 区切り = diags_of("[.txt]\nA | C:\\Windows\\notepad.exe\n---\n :confirm ためし\nB | C:\\Windows\\notepad.exe");
+        let 区切り = diags_of(
+            "[.txt]\nA | C:\\Windows\\notepad.exe\n---\n :confirm ためし\nB | C:\\Windows\\notepad.exe",
+        );
         assert!(
             区切り
                 .iter()
@@ -448,9 +448,11 @@ mod tests {
     #[test]
     fn 存在しない絶対パスを警告する() {
         let diags = diags_of("[.txt]\nA | C:\\存在しないフォルダ\\存在しない.exe");
-        assert!(diags
-            .iter()
-            .any(|d| d.message.contains("実行ファイルが見つかりません")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("実行ファイルが見つかりません"))
+        );
     }
 
     #[test]

@@ -5,9 +5,9 @@
 コマンドラインの組み立てを他所に書くと、プレビューが嘘をつくようになる。
 */
 
+use crate::Target;
 use crate::config::MenuItem;
 use crate::placeholder::{PathPlaceholders, RunContext};
-use crate::Target;
 use std::path::{Path, PathBuf};
 /// 起動 1 回ぶんの内容
 ///

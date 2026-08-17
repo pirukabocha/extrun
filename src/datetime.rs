@@ -85,7 +85,7 @@ impl LocalTime {
                     // 書式として解釈できない並びはそのまま残す。パース時に
                     // エラーにしているので、ここに来るのは検証を通さずに
                     // 呼んだときだけ
-                    None => out.extend(std::iter::repeat(letter as char).take(count)),
+                    None => out.extend(std::iter::repeat_n(letter as char, count)),
                 },
             }
         }
@@ -247,7 +247,7 @@ fn validate_spec(spec: &str) -> Option<String> {
 
 /// 書式として解釈できなかった並びの説明
 fn message_for(letter: u8, count: usize) -> String {
-    let repeated: String = std::iter::repeat(letter as char).take(count).collect();
+    let repeated: String = std::iter::repeat_n(letter as char, count).collect();
 
     match letter {
         b'y' => format!("$t{{}} の年は yy か yyyy で書きます: {}", repeated),
