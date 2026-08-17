@@ -35,6 +35,18 @@ jobs:
       - name: テスト
         run: cargo test
 
+      # ダイアログを実際に出して操作するテスト（prompt / progress）と、
+      # 実プロセスの終了を待つテスト（launch）。**題名でウィンドウを探すので
+      # 直列に走らせる。** ローカルでは 5 秒ほどで終わるので、固まったときに
+      # 6 時間ぶら下がらないよう時間で頭打ちにしておく。
+      #
+      # 手で叩く前提のテストは、いずれ叩かれなくなる。DLGTEMPLATE の組み立てを
+      # 誤ると DialogBoxIndirectParamW が -1 を返すだけで、ほかに気づく手段が
+      # 無いため、ここで毎回通す価値がある。
+      - name: 画面が要るテスト
+        timeout-minutes: 5
+        run: cargo test -- --ignored --test-threads=1
+
       - name: リリースビルド
         run: cargo build --release
 

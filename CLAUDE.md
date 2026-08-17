@@ -168,6 +168,6 @@ extrun.exe --help              # 使い方
 - **`README.md`** — 「これは何か・どう入れるか・どこを読むか」に徹する。**書式の解説を書き足さない**（仕様書との二重管理になり、実際に腐った）。書けることは一覧表で示して各節へリンクする。
 - **`packaging/readme.txt`** — 配布 zip に入れる説明書。`README.md` の要約ではなく、zip を展開した人向けの独立した文書。見出しのバージョンは `Cargo.toml` と揃える（`build-release.ps1` が検査する）。
 - **`CHANGELOG.md`** — 変更履歴。Keep a Changelog 形式。リリースのたびに追記する。**配布 zip にも同梱するので、利用者から見て何が変わるかを書く**（リファクタリング・テストの追加・CI・ドキュメントの内部整理は載せない。それは git log の担当）。設定ファイルの見直しが要る変更は必ず「変更」の欄に入れる。利用者はそこだけ読んで更新の可否を判断する。
-- **`.github/workflows/`** — `ci.yml`（`fmt` / `clippy -D warnings` / `test` / サンプル設定の `--check`）と `release.yml`（タグから zip を作って下書き Release に添付）。
+- **`.github/workflows/`** — `ci.yml`（`fmt` / `clippy -D warnings` / `test` / **`--ignored` の実機テスト** / サンプル設定の `--check`）と `release.yml`（タグから zip を作って下書き Release に添付）。`#[ignore]` 付きのテストも CI で毎回走る（`windows-latest` にはデスクトップがある）。**手で叩く前提のテストはいずれ叩かれなくなる**ので、`--test-threads=1` を付けた専用のステップにしてある。固まったときに備えて `timeout-minutes: 5`（ローカルでは 5 秒で終わる）。
 
 同じ話が README.md・`docs/extrun-config-format.md`・`packaging/readme.txt` の 3 か所に出てくることがある（導入手順、`--check`、トラブルシューティング）。片方だけ直すとずれるので、書き換えるときは横断で確認する。

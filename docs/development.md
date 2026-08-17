@@ -16,7 +16,7 @@ cargo clippy --all-targets
 cargo fmt --check
 ```
 
-同じ内容を GitHub Actions（[ci.yml](../.github/workflows/ci.yml)）が `windows-latest` で実行します。テストが `extrun-config.txt` をフィクスチャとして読むので、サンプル設定の書式エラーも CI で検出されます。
+同じ内容を GitHub Actions（[ci.yml](../.github/workflows/ci.yml)）が `windows-latest` で実行します。テストが `extrun-config.txt` をフィクスチャとして読むので、サンプル設定の書式エラーも CI で検出されます。**画面が要るテスト（`#[ignore]` 付き）も CI で毎回走ります**（`cargo test -- --ignored --test-threads=1`）。
 
 > [!IMPORTANT]
 > **リリースビルドにはコンソールがありません。** `build.rs` がリリース時だけ `/SUBSYSTEM:WINDOWS` を指定するため、`println!` / `eprintln!` の出力はどこにも出ません。同じ理由で、リリースバイナリを PowerShell から起動しても**終了を待たず**、`$LASTEXITCODE` も設定されません。`--check` の終了コードを見るときは `Start-Process -Wait -PassThru` の `ExitCode` を使ってください（コマンドプロンプトは待つので `%errorlevel%` がそのまま使えます）。
@@ -64,7 +64,7 @@ extrun/
 │   ├── build-release.ps1       # 配布用 zip の作成
 │   └── readme.txt              # 配布物に同梱する説明書
 ├── .github/workflows/
-│   ├── ci.yml                  # fmt / clippy / test / サンプル設定の --check
+│   ├── ci.yml                  # fmt / clippy / test / 実機テスト / サンプル設定の --check
 │   └── release.yml             # タグから zip を作って下書き Release に添付
 ├── build.rs                    # サブシステムと VERSIONINFO
 ├── extrun-config.txt           # サンプル設定（兼テスト用フィクスチャ）
