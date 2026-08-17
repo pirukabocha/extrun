@@ -696,6 +696,31 @@ fn split_statements(text: &str, diags: &mut Vec<Diag>) -> Vec<Stmt> {
 
             match stmts.last_mut() {
                 Some(Stmt::Item(item)) => {
+                    // 値を持たない `:admin` / `:wait` も、持つ欄と同じく 1 項目に
+                    // 1 つだけ。ここだけ黙って通すと「なぜこれは怒られないのか」
+                    // という食い違いになる
+                    let existing = match keyword {
+                        "admin" => item.admin,
+                        "wait" => item.wait,
+                        "dir" => item.working_dir.as_ref().map(|(line, _)| *line),
+                        "confirm" => item.confirm.as_ref().map(|(line, _)| *line),
+                        "delay" => item.delay.as_ref().map(|(line, _)| *line),
+                        _ => item.icon.as_ref().map(|(line, _)| *line),
+                    };
+
+                    // **後ろが勝つ規則を作らずエラーにする。** 同じ項目に 2 回
+                    // 書くのはまず書き間違い（コピペのしそこない、直したつもりで
+                    // 古い行を消し忘れた）で、黙って片方を捨てると「直したのに
+                    // 効かない」という分かりにくい詰まり方をする。別名の定義と
+                    // `[extrun]` の設定をエラーにしてあるのと同じ判断
+                    if let Some(first_line) = existing {
+                        diags.push(Diag::error(
+                            line,
+                            format!(":{keyword} が重複しています（{first_line}行目にもあります）"),
+                        ));
+                        continue;
+                    }
+
                     if keyword == "admin" {
                         item.admin = Some(line);
                         continue;
@@ -1074,7 +1099,17 @@ fn build_item(
     let working_dir = match &source.working_dir {
         Some((dir_line, value)) => {
             warn_stray_caret(value, *dir_line, diags);
-            expand_env(&aliases.expand(value, *dir_line, diags), true)
+            let resolved = expand_env(&aliases.expand(value, *dir_line, diags), true);
+            // 値の無い `:icon` をエラーにしてあるのと揃える。`:dir` とだけ書くのは
+            // 書き忘れか消し忘れで、黙って未指定として扱うと「指定したのに効かない」
+            // になる（`:confirm` は値なしが意図的な仕様なので対象外）
+            if resolved.trim().is_empty() {
+                diags.push(Diag::error(
+                    *dir_line,
+                    ":dir にパスがありません（例: :dir C:\\work）".to_string(),
+                ));
+            }
+            resolved
         }
         None => String::new(),
     };
@@ -2111,6 +2146,48 @@ mod tests {
         let root = std::env::var("SystemRoot").expect("SystemRoot は必ずある");
         let config = parse_ok("[.txt]\nA | %systemroot%\\notepad.exe");
         assert_eq!(config.apps[0].path, format!("{}\\notepad.exe", root));
+    }
+
+    /// 別名の定義や `[extrun]` の設定と揃える。順序で結果が変わる規則を作らない
+    #[test]
+    fn 重複した名前付きフィールドはエラー() {
+        let errors = error_messages("[.txt]\nA | C:\\a.exe\n :dir C:\\one\n :dir C:\\two");
+        assert!(
+            errors
+                .iter()
+                .any(|m| m.contains(":dir が重複しています（3行目にもあります）")),
+            "{:?}",
+            errors
+        );
+    }
+
+    /// 値を取らない `:admin` / `:wait` も同じ扱い（ここだけ黙って通すと食い違う）
+    #[test]
+    fn 値を取らないフィールドの重複もエラー() {
+        let errors = error_messages("[.txt]\nA | C:\\a.exe\n :admin\n :admin");
+        assert!(
+            errors.iter().any(|m| m.contains(":admin が重複しています")),
+            "{:?}",
+            errors
+        );
+    }
+
+    /// 値の無い `:icon` がエラーなのと揃える
+    #[test]
+    fn 値の無い_dir_はエラー() {
+        let errors = error_messages("[.txt]\nA | C:\\a.exe\n :dir");
+        assert!(
+            errors.iter().any(|m| m.contains(":dir にパスがありません")),
+            "{:?}",
+            errors
+        );
+    }
+
+    /// `:confirm` だけは値なしが意図的な仕様なのでエラーにしない
+    #[test]
+    fn 値の無い_confirm_はエラーにしない() {
+        let config = parse_ok("[.txt]\nA | C:\\a.exe\n :confirm");
+        assert_eq!(config.apps[0].confirm.as_deref(), Some(""));
     }
 
     /// `:dir` と `:confirm` は項目とは別の行に書ける。書式の誤りを項目の行で

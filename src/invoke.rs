@@ -89,7 +89,16 @@ fn resolve_working_dir(
 /// `+`（まとめて渡す）の引数を組み立てる
 ///
 /// 引数がちょうど `$p` のところに全パスを展開する。`$p` がどこにも無ければ末尾に足す。
+///
+/// **引数欄を空にしてあれば引数なしで起動する。** 欄を空にする（行末を `|` で
+/// 終える）のと、欄ごと省略する（`$p` が渡る）のは仕様書でも区別している。
+/// かつては `+` のときだけ空欄でも全パスが末尾に付き、同じ書き方が場所によって
+/// 逆の意味になっていた。
 fn all_mode_args(base_args: &[String], targets: &[Target], ctx: &RunContext) -> Vec<String> {
+    if base_args.is_empty() {
+        return Vec::new();
+    }
+
     let placeholder_count = base_args.iter().filter(|arg| arg.as_str() == "$p").count();
     // エスケープを解する判定を使う。素の `contains("$p")` だと `^$path` のような
     // 書き方を「`$p` がある」と誤解し、末尾へのパス追加を止めてしまう
@@ -137,6 +146,22 @@ mod tests {
         let targets = vec![Target::from_path(PathBuf::from("C:\\x\\y.txt"))];
         let invocations = resolve_invocations(&config.apps[0], &targets, &RunContext::for_test());
         assert_eq!(invocations[0].working_dir, ".");
+    }
+
+    /// 引数欄を空にする（行末を `|` で終える）と引数なし。欄ごと省略したとき
+    /// （`$p` が渡る）とは区別する。**`+` でも意味を揃える** — かつては `+` の
+    /// ときだけ空欄でも全パスが末尾に付き、同じ書き方が逆の意味になっていた
+    #[test]
+    fn まとめて渡す項目でも空の引数欄は引数なし() {
+        let config = parse("[.txt]\n+ A | C:\\a.exe |").config;
+        let targets = vec![
+            Target::from_path(PathBuf::from("C:\\x\\1.txt")),
+            Target::from_path(PathBuf::from("C:\\x\\2.txt")),
+        ];
+        let invocations = resolve_invocations(&config.apps[0], &targets, &RunContext::for_test());
+
+        assert_eq!(invocations.len(), 1, "+ は 1 プロセス");
+        assert!(invocations[0].args.is_empty(), "{:?}", invocations[0].args);
     }
 
     /// `^$path` を「`$p` がある」と誤解すると、末尾へのパス追加が止まり、
