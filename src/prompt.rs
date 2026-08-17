@@ -6,9 +6,9 @@
 */
 
 use crate::dialog::{
-    self, ATOM_BUTTON, ATOM_EDIT, ATOM_STATIC, BUTTON_HEIGHT, BUTTON_WIDTH, MARGIN, STYLE_BUTTON,
-    STYLE_DEFAULT_BUTTON, STYLE_EDIT, STYLE_STATIC, push_header, push_item, to_dword_buffer,
-    to_wide,
+    self, ATOM_BUTTON, ATOM_COMBOBOX, ATOM_EDIT, ATOM_STATIC, BUTTON_HEIGHT, BUTTON_WIDTH, MARGIN,
+    STYLE_BUTTON, STYLE_COMBOBOX, STYLE_DEFAULT_BUTTON, STYLE_EDIT, STYLE_STATIC, push_header,
+    push_item, to_dword_buffer, to_wide,
 };
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -51,6 +51,11 @@ pub enum Rule {
     Num,
     /// ファイル名に使える文字（`$?name{...}`）
     Name,
+    /// 並べた選択肢から選ぶ（`$?list{説明=選択肢1,選択肢2}`）
+    ///
+    /// **選ばせてしまえば検証そのものが要らない。** 入力値の決まりを増やすより、
+    /// 取りうる値が決まっている場面ではこちらの方が確実で、書く側も楽になる。
+    List,
 }
 
 impl Rule {
@@ -61,6 +66,7 @@ impl Rule {
             "int" => Some(Rule::Int),
             "num" => Some(Rule::Num),
             "name" => Some(Rule::Name),
+            "list" => Some(Rule::List),
             _ => None,
         }
     }
@@ -93,8 +99,24 @@ impl Rule {
             },
 
             Rule::Name => check_file_name(value),
+
+            // 一覧から選ばせるので、決まりを満たさない値がそもそも作れない
+            Rule::List => Ok(()),
         }
     }
+}
+
+/// `$?list{...}` の `=` の右側を選択肢に分ける
+///
+/// 区切りは `,`。**`|` は使えない** — 設定ファイルの欄の区切りなので、
+/// `^|` と書かせることになって読みにくい。選択肢そのものに `,` は書けない。
+///
+/// 前後の空白は落とすので `85, 95, 100` と並べて書ける。**先頭が既定の選択**。
+pub fn list_options(spec: &str) -> Vec<&str> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|option| !option.is_empty())
+        .collect()
 }
 
 /// ファイル名として使えるか調べる
@@ -156,6 +178,11 @@ struct PromptData {
 /// 何も起きない」になり、検証がかえって邪魔になるため。打った内容を残した
 /// まま理由を添えて出し直す。
 pub fn ask(rule: Rule, message: &str, default_value: &str) -> Option<String> {
+    // 選択肢から選ぶときは聞き直す必要がない（満たさない値を作れない）
+    if rule == Rule::List {
+        return ask_from_list(message, default_value);
+    }
+
     let mut current = default_value.to_string();
     let mut problem: Option<String> = None;
 
@@ -201,6 +228,191 @@ fn show_dialog(message: &str, problem: Option<&str>, default_value: &str) -> Opt
         data.result
     } else {
         None
+    }
+}
+
+/// 一覧から選ぶダイアログを出す
+///
+/// 打ち込めない（`CBS_DROPDOWNLIST`）ので聞き直す必要がなく、`ask` のような
+/// ループを持たない。
+fn ask_from_list(message: &str, spec: &str) -> Option<String> {
+    let options: Vec<String> = list_options(spec)
+        .into_iter()
+        .map(|option| option.to_string())
+        .collect();
+
+    // `--check` が書式の時点で拾うが、選択肢にプレースホルダーを書くと
+    // 実行するまで中身が決まらないので、ここでも受け止める
+    if options.is_empty() {
+        crate::show_error_dialog("エラー", &format!("選択肢がありません:\n{}", message));
+        return None;
+    }
+
+    let template = build_list_template(message, options.len());
+    let mut data = ListData {
+        options: options.iter().map(|option| to_wide(option)).collect(),
+        selected: None,
+    };
+
+    let result = dialog::show_modal(
+        &template,
+        Some(list_dialog_proc),
+        &mut data as *mut ListData as LPARAM,
+    );
+
+    if result == -1 {
+        crate::show_error_dialog(
+            "エラー",
+            &format!("選択欄を表示できませんでした:\n{}", message),
+        );
+        return None;
+    }
+
+    if result != IDOK as isize {
+        return None;
+    }
+
+    data.selected.and_then(|index| options.get(index).cloned())
+}
+
+/// 一覧から選ぶダイアログとやり取りする値
+struct ListData {
+    /// 並べる選択肢
+    options: Vec<Vec<u16>>,
+    /// 選ばれた位置（`OK` が押されたときだけ入る）
+    selected: Option<usize>,
+}
+
+/// `windows-sys` が `Win32_UI_Controls` を有効にしないと出さない定数
+const CB_ADDSTRING: u32 = 0x0143;
+const CB_GETCURSEL: u32 = 0x0147;
+const CB_SETCURSEL: u32 = 0x014E;
+const CB_ERR: isize = -1;
+
+/// コンボボックスのコントロール ID
+const ID_LIST: u16 = 101;
+
+/// 開いたときに見せる選択肢の数の上限（これを超えるとスクロールする）
+const MAX_VISIBLE_OPTIONS: usize = 8;
+
+/// 選択肢 1 つぶんの高さ（ダイアログ単位）
+const OPTION_HEIGHT: i16 = 12;
+
+/// 一覧から選ぶダイアログのテンプレートを組み立てる
+fn build_list_template(message: &str, option_count: usize) -> Vec<u32> {
+    let mut words: Vec<u16> = Vec::new();
+
+    let list_y = MARGIN + MESSAGE_HEIGHT;
+    // ボタンは**閉じているときの高さ**を基準に置く。開いた一覧は下に重なる
+    let button_y = list_y + EDIT_HEIGHT + MARGIN;
+    let dialog_height = button_y + BUTTON_HEIGHT + MARGIN;
+    let content_width = DIALOG_WIDTH - MARGIN * 2;
+
+    // コンボボックスの高さは「開いたときの一覧まで含めた」大きさを書く。
+    // 閉じているときの高さと同じにすると、押しても何も見えない
+    let visible = option_count.min(MAX_VISIBLE_OPTIONS) as i16;
+    let list_height = EDIT_HEIGHT + OPTION_HEIGHT * visible;
+
+    push_header(&mut words, 4, DIALOG_WIDTH, dialog_height, dialog::TITLE);
+
+    // --- 説明文 ---
+    push_item(
+        &mut words,
+        STYLE_STATIC,
+        MARGIN,
+        MARGIN,
+        content_width,
+        MESSAGE_HEIGHT,
+        u16::MAX,
+        ATOM_STATIC,
+        message,
+    );
+
+    // --- 選択肢 ---
+    push_item(
+        &mut words,
+        STYLE_COMBOBOX,
+        MARGIN,
+        list_y,
+        content_width,
+        list_height,
+        ID_LIST,
+        ATOM_COMBOBOX,
+        "",
+    );
+
+    // --- OK / キャンセル ---
+    push_item(
+        &mut words,
+        STYLE_DEFAULT_BUTTON,
+        DIALOG_WIDTH - MARGIN - BUTTON_WIDTH * 2 - 4,
+        button_y,
+        BUTTON_WIDTH,
+        BUTTON_HEIGHT,
+        IDOK as u16,
+        ATOM_BUTTON,
+        "OK",
+    );
+    push_item(
+        &mut words,
+        STYLE_BUTTON,
+        DIALOG_WIDTH - MARGIN - BUTTON_WIDTH,
+        button_y,
+        BUTTON_WIDTH,
+        BUTTON_HEIGHT,
+        IDCANCEL as u16,
+        ATOM_BUTTON,
+        "キャンセル",
+    );
+
+    to_dword_buffer(&words)
+}
+
+/// 一覧から選ぶダイアログの手続き
+unsafe extern "system" fn list_dialog_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> isize {
+    unsafe {
+        match msg {
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
+                let data = &mut *(lparam as *mut ListData);
+
+                let list = GetDlgItem(hwnd, ID_LIST as i32);
+                for option in &data.options {
+                    SendMessageW(list, CB_ADDSTRING, 0, option.as_ptr() as LPARAM);
+                }
+                // 先頭を既定の選択にする（何も選ばれていない状態を作らない）
+                SendMessageW(list, CB_SETCURSEL, 0, 0);
+                1
+            }
+
+            WM_COMMAND => {
+                let control = (wparam & 0xFFFF) as u16;
+                if control != IDOK as u16 && control != IDCANCEL as u16 {
+                    return 0;
+                }
+
+                if control == IDOK as u16 {
+                    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ListData;
+                    if !pointer.is_null() {
+                        let list = GetDlgItem(hwnd, ID_LIST as i32);
+                        let index = SendMessageW(list, CB_GETCURSEL, 0, 0);
+                        if index != CB_ERR {
+                            (*pointer).selected = Some(index as usize);
+                        }
+                    }
+                }
+
+                EndDialog(hwnd, control as isize);
+                1
+            }
+
+            _ => 0,
+        }
     }
 }
 
@@ -493,7 +705,7 @@ pub fn validate(text: &str) -> Option<String> {
         let keyword = &text[keyword_start..cursor];
         let Some(rule) = Rule::from_keyword(keyword) else {
             return Some(format!(
-                "$? に未知の指定があります: {}（使えるのは int / num / name）",
+                "$? に未知の指定があります: {}（使えるのは int / num / name / list）",
                 keyword
             ));
         };
@@ -514,6 +726,15 @@ pub fn validate(text: &str) -> Option<String> {
         // 説明の中のパスや日時のプレースホルダーは解決される
         if spec.contains("$?") {
             return Some("$?{} を入れ子にはできません".to_string());
+        }
+
+        // 選択肢が無ければ選びようがない。**書式の時点で拾えるのでエラーにする**
+        // （実行してから「選択肢がありません」と出るのでは遅い）
+        if rule == Rule::List
+            && !default_value.contains('$')
+            && list_options(default_value).is_empty()
+        {
+            return Some("$?list{} に選択肢がありません（例: $?list{品質=85,95,100}）".to_string());
         }
 
         // 既定値が決まりを満たしているかも、ここで見ておける。
@@ -563,6 +784,25 @@ mod tests {
     use std::ptr::null_mut;
 
     /// 書かれた入力欄の元の文字列（`RunContext` の見出しになるもの）
+    #[test]
+    fn 選択肢は前後の空白を落として並ぶ() {
+        assert_eq!(list_options("85,95,100"), vec!["85", "95", "100"]);
+        assert_eq!(list_options("85, 95 , 100"), vec!["85", "95", "100"]);
+        // 空の要素は落とす（末尾の `,` を書いても増えない）
+        assert_eq!(list_options("a,,b,"), vec!["a", "b"]);
+        assert!(list_options("").is_empty());
+    }
+
+    /// 選択肢が無ければ選びようがないので、書式の時点で拾う
+    #[test]
+    fn 選択肢の無い_list_はエラー() {
+        assert!(
+            validate("$?list{品質}").is_some_and(|m| m.contains("$?list{} に選択肢がありません"))
+        );
+        // 決まりの語そのものは受け付ける
+        assert!(validate("$?list{品質=85,95}").is_none());
+    }
+
     fn sources(text: &str) -> Vec<&str> {
         prompts(text).into_iter().map(|p| p.source).collect()
     }
@@ -601,6 +841,43 @@ mod tests {
         let 操作 = std::thread::spawn(cancel);
         assert_eq!(ask(Rule::Any, "取り消す入力欄", "既定値"), None);
         操作.join().expect("操作のスレッドが終わる");
+
+        // --- 選択肢は先頭が選ばれた状態で開く ---
+        let 操作 = std::thread::spawn(|| answer(&[None]));
+        assert_eq!(
+            ask(Rule::List, "品質", "85,95,100"),
+            Some("85".to_string()),
+            "そのまま OK すれば先頭の選択肢が返る"
+        );
+        操作.join().expect("操作のスレッドが終わる");
+
+        // --- 選び直した値が返る ---
+        let 操作 = std::thread::spawn(|| select(2));
+        assert_eq!(
+            ask(Rule::List, "品質", "85, 95, 100"),
+            Some("100".to_string()),
+            "空白を挟んで書いても選択肢は落とされる"
+        );
+        操作.join().expect("操作のスレッドが終わる");
+
+        // --- 選択肢もキャンセルできる ---
+        let 操作 = std::thread::spawn(cancel);
+        assert_eq!(ask(Rule::List, "取り消す選択欄", "a,b"), None);
+        操作.join().expect("操作のスレッドが終わる");
+    }
+
+    /// コンボボックスの位置を選んでから OK を押す
+    fn select(index: usize) {
+        let Some(hwnd) = wait_for_dialog() else {
+            return;
+        };
+
+        unsafe {
+            let list = GetDlgItem(hwnd, ID_LIST as i32);
+            SendMessageW(list, CB_SETCURSEL, index, 0);
+            PostMessageW(hwnd, WM_COMMAND, IDOK as WPARAM, 0);
+        }
+        wait_until_closed(hwnd);
     }
 
     /// 入力ダイアログが出るたびに、値を入れて OK を押す

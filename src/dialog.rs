@@ -39,11 +39,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 pub const ATOM_BUTTON: u16 = 0x0080;
 pub const ATOM_EDIT: u16 = 0x0081;
 pub const ATOM_STATIC: u16 = 0x0082;
+pub const ATOM_COMBOBOX: u16 = 0x0085;
 
 /// `windows-sys` が `Win32_UI_Controls` を有効にしないと出さない定数
 ///
 /// これだけのためにフィーチャーを増やすと、使わない API の定義まで抱える。
 pub const SS_LEFT: u32 = 0x0000_0000;
+
+/// 一覧から選ぶだけのコンボボックス（打ち込めない）
+///
+/// 選択肢を並べる `$?list{...}` では、入力を検証する必要そのものが無くなる。
+/// 打ち込める `CBS_DROPDOWN` にすると検証が要る側に戻ってしまう。
+pub const CBS_DROPDOWNLIST: u32 = 0x0003;
 
 /// ウィンドウスタイル
 ///
@@ -55,6 +62,9 @@ pub const STYLE_STATIC: u32 = WS_CHILD | WS_VISIBLE | SS_LEFT;
 pub const STYLE_EDIT: u32 = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32;
 pub const STYLE_DEFAULT_BUTTON: u32 = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32;
 pub const STYLE_BUTTON: u32 = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32;
+/// **高さは「開いたときの一覧まで含めた」大きさ**を書く。入力欄と同じつもりで
+/// 低くすると、押しても項目が 1 つも見えないコンボボックスになる。
+pub const STYLE_COMBOBOX: u32 = WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST;
 
 /// 共通の余白とボタンの大きさ（ダイアログ単位。フォントに合わせて拡大縮小される）
 ///

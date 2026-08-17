@@ -330,6 +330,7 @@ fn rule_note(rule: crate::prompt::Rule) -> &'static str {
         crate::prompt::Rule::Int => " [整数]",
         crate::prompt::Rule::Num => " [数値]",
         crate::prompt::Rule::Name => " [ファイル名]",
+        crate::prompt::Rule::List => " [選択]",
     }
 }
 
