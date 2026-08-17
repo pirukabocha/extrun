@@ -7,7 +7,7 @@
 「そのパスに対して実際に何が起動されるか」を見るのは `preview.rs` の担当。
 */
 
-use crate::config::{self, Config, Diag, MenuItem, Severity};
+use crate::config::{Config, Diag, MenuItem, Severity};
 use crate::console;
 use crate::menu;
 use std::path::Path;
@@ -110,7 +110,7 @@ fn collect_item_diags(items: &[MenuItem], diags: &mut Vec<Diag>) {
         // 相対パスは実行時のカレント次第なので確認しない。ただし展開されなかった
         // `%NAME%` が残っているパスは、絶対と判定されないだけで解決もしないので見る
         let path = Path::new(&item.path);
-        let checkable = path.is_absolute() || config::has_unexpanded_env(&item.path);
+        let checkable = path.is_absolute() || crate::text::has_unexpanded_env(&item.path);
         if checkable && !path.exists() {
             diags.push(Diag::warning(
                 item.line,
@@ -144,7 +144,7 @@ fn warn_missing_icon(item: &MenuItem, diags: &mut Vec<Diag>) {
     };
 
     let path = Path::new(&spec.path);
-    if !path.is_absolute() && !config::has_unexpanded_env(&spec.path) {
+    if !path.is_absolute() && !crate::text::has_unexpanded_env(&spec.path) {
         return;
     }
 

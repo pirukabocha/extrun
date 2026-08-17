@@ -6,8 +6,8 @@
 解決すると `^$` が `$` になったあとプレースホルダーとして拾われてしまう。
 */
 
-use crate::config::SPECIALS;
 use crate::datetime::LocalTime;
+use crate::text::SPECIALS;
 use std::cell::RefCell;
 use std::path::Path;
 

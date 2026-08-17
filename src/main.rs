@@ -16,6 +16,7 @@ mod placeholder;
 mod preview;
 mod progress;
 mod prompt;
+mod text;
 
 use config::{Config, MenuPosition};
 use std::env;

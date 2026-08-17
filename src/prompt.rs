@@ -376,7 +376,7 @@ pub struct Prompt<'a> {
 
 /// `text` の `start` が入力欄の始まりなら、`{` までの長さを返す
 ///
-/// `config::split_args` が中括弧を数えるのにも使う（`$?name{新しい 名前}` の
+/// `text::split_args` が中括弧を数えるのにも使う（`$?name{新しい 名前}` の
 /// ように説明に空白が入るため、`{...}` の中では引数を区切ってはいけない）。
 pub fn opening_len(text: &str, start: usize) -> Option<usize> {
     let bytes = text.as_bytes();
