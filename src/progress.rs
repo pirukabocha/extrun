@@ -31,6 +31,7 @@ use crate::dialog::{
     self, push_header, push_item, to_dword_buffer, to_wide, ATOM_BUTTON, ATOM_STATIC,
     BUTTON_HEIGHT, BUTTON_WIDTH, MARGIN, STYLE_BUTTON, STYLE_DEFAULT_BUTTON, STYLE_STATIC,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -92,6 +93,19 @@ pub enum Step {
 }
 
 /// ダイアログとやり取りする値
+/// 起動処理（`step`）の中にいるか
+///
+/// `:admin` の起動は `ShellExecuteExW` に入り、**UAC の確認が出ているあいだに
+/// Windows がメッセージを処理することがある**。そこで溜まっていた `WM_TIMER` が
+/// 配送されると、番号が進む前にもう一度 `step` が呼ばれ、同じ対象を二重に起動して
+/// しまう（管理者権限の処理が 2 回走る）。`:wait` 用の「前のプロセスが動いているか」
+/// という見張りはここでは効かない — 起動の直前にハンドルを手放しているため。
+///
+/// 狙って再現するのは難しいが、起きたときに原因へたどり着けない種類の不具合なので、
+/// 印を 1 つ立てて塞いでおく。**ダイアログは 1 つのスレッドでしか動かない**ので、
+/// 厳密な順序付けは要らない（`Relaxed` で足りる）。
+static LAUNCHING: AtomicBool = AtomicBool::new(false);
+
 struct ProgressData<'a> {
     /// 見出しに出す項目の名前
     name: String,
@@ -297,7 +311,11 @@ unsafe extern "system" fn dialog_proc(
 
             // 1 つ目は待たずに起動する。押した直後に何も起きないと、選び直したく
             // なって二重に起動される。待つのは起動と起動の「あいだ」
-            if step(hwnd, data) {
+            LAUNCHING.store(true, Ordering::Relaxed);
+            let again = step(hwnd, data);
+            LAUNCHING.store(false, Ordering::Relaxed);
+
+            if again {
                 SetTimer(hwnd, TIMER_ID, data.tick_ms(), None);
             }
 
@@ -308,13 +326,21 @@ unsafe extern "system" fn dialog_proc(
             if wparam != TIMER_ID {
                 return 0;
             }
+            // 起動処理の途中に配送されたタイマーは捨てる。**`ProgressData` を
+            // 可変で借りるより前に確かめる**（借りたあとだと、同じデータへの
+            // 可変参照が 2 つ同時に存在することになる）
+            if LAUNCHING.load(Ordering::Relaxed) {
+                return 1;
+            }
             if let Some(data) = data_of(hwnd) {
                 // `:wait` と `:delay` を併記したとき、終了を見てからさらに
                 // 空ける間隔。タイマーの間隔は様子見の周期なので別に数える
                 if data.resume_at.is_some_and(|at| Instant::now() < at) {
                     return 1;
                 }
+                LAUNCHING.store(true, Ordering::Relaxed);
                 step(hwnd, data);
+                LAUNCHING.store(false, Ordering::Relaxed);
             }
             1
         }

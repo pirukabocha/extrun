@@ -83,9 +83,12 @@ pub(crate) fn launch_all(name: &str, invocations: &[Invocation], delay: u32, wai
         // ハンドルはここで閉じる（次を起動する前に手放す）
         running = None;
 
-        run.attempted = index + 1;
         let invocation = &invocations[index];
 
+        // `attempted` を進めるのは**起動を試み終えてから**。先に進めると、UAC を
+        // 断られた 1 つが「起動済み」にも「残り」にも数えられず、要約の件数が
+        // 合わなくなる（10 件中 2 件起動・残り 7 件、のように 1 件消える）。
+        // クリップボードの一覧からも漏れるので、やり直したい当人が拾えない。
         match spawn_command(
             &invocation.program,
             &invocation.args,
@@ -95,14 +98,17 @@ pub(crate) fn launch_all(name: &str, invocations: &[Invocation], delay: u32, wai
         ) {
             Ok(Launch::Started(handle)) => {
                 running = handle;
+                run.attempted = index + 1;
                 run.started += 1;
                 progress::Step::Started
             }
-            // 昇格を断られたら、残りの対象も起動しない
+            // 昇格を断られたら、残りの対象も起動しない。**この 1 つも「残り」に
+            // 含める** — 起動していないのだから、やり直す対象はここから後ろになる
             Ok(Launch::Cancelled) => progress::Step::Stop,
             // 起動できなかった理由は集めておいて、あとで 1 枚にまとめる。
             // 起動していないので待つ相手もいない（次へ進む）
             Err(reason) => {
+                run.attempted = index + 1;
                 run.reasons.push(reason);
                 progress::Step::Started
             }
@@ -114,7 +120,19 @@ pub(crate) fn launch_all(name: &str, invocations: &[Invocation], delay: u32, wai
     if shows_progress(wait, delay, total) {
         match progress::run(name, total, delay, wait, &mut launch) {
             progress::Outcome::Finished => {}
-            // ダイアログを出せなかったときは、せめて順番だけは守って起動する
+            // ダイアログを出せなかったとき。`:delay` だけなら、せめて順番を守って
+            // 起動する（待ち時間には上限があるので、無表示でも必ず終わる）。
+            //
+            // **`:wait` では 1 つも起動しない。** 待ちの長さは起動したプロセス側に
+            // 委ねられていて上限が無く、その引き換えに「中止と一時停止の手立てを
+            // 常に持たせる」と約束している。ダイアログが無ければその約束を果たせず、
+            // 無表示・中止不可のまま固まる。約束を守れないなら実行しない方に倒す。
+            progress::Outcome::Failed if wait => show_error_dialog(
+                "エラー",
+                "進行状況ダイアログを表示できないため、実行を取りやめました。\n\n\
+                 :wait は前のプロセスが終わるまで次を起動しないため、\
+                 途中で中止する手立てが無いまま待ち続けることになります。",
+            ),
             progress::Outcome::Failed => launch_in_order(total, delay, &mut launch),
             stopped => interrupted = Some(stopped),
         }
@@ -396,6 +414,22 @@ pub const INTERPRETER_HINT: &str =
 /// `powershell.exe` と `pwsh.exe` のどちらを指すかもウィンドウの出し方も
 /// 決められないため。ExtRun が代われない選択は利用者に残す。
 ///
+/// 区切りを含まない名前か（`CreateProcess` が PATH から探す）
+///
+/// `notepad.exe` のように書かれた実行ファイルは、`Command` に渡せば PATH から
+/// 見つかる。**起動する前に存在を確かめてはいけない** — `Path::exists()` は
+/// カレントフォルダを基準に解決するので、PATH にあるものを「見つかりません」と
+/// 撥ねてしまう。`--check` が相対パスの存在を確認しないのと同じ線引き。
+///
+/// 見つからなければ `spawn()` が失敗し、いつもの起動失敗ダイアログが出る。
+pub(crate) fn searched_on_path(exe_path: &Path) -> bool {
+    // `is_none_or` は Rust 1.82 から。`rust-version` は 1.77.2 に留めてある
+    match exe_path.parent() {
+        Some(parent) => parent.as_os_str().is_empty(),
+        None => true,
+    }
+}
+
 /// 実行時の失敗ダイアログと `--check` の警告が同じ判断をするよう、表はここ
 /// 1 か所に置く。
 pub fn needs_interpreter(exe_path: &Path) -> bool {
@@ -409,6 +443,16 @@ pub fn needs_interpreter(exe_path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// 区切りを含まない名前は `CreateProcess` が PATH から探す。起動する前に
+    /// 存在を確かめると、カレントフォルダ基準で解決して撥ねてしまう
+    #[test]
+    fn 区切りのない名前は_path_から探す() {
+        assert!(searched_on_path(Path::new("notepad.exe")));
+        assert!(!searched_on_path(Path::new("tools\\app.exe")));
+        assert!(!searched_on_path(Path::new("C:\\Windows\\notepad.exe")));
+    }
+
     /// `ShellExecuteExW` に渡す 1 本のコマンドラインの組み立て
     ///
     /// 受け取り側の `CommandLineToArgvW` が元の並びに戻せる形でなければならない。

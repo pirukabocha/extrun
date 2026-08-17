@@ -65,6 +65,10 @@ pub fn resolve_invocations(
 /// 作業フォルダを解決する
 ///
 /// プレースホルダーは最初の対象を基準にする。未指定なら実行ファイルの親ディレクトリ。
+///
+/// **`notepad.exe` のように区切りを含まない名前では、親が「空文字列」として
+/// 取れる**（`None` ではない）。そのまま作業フォルダに渡すと `CreateProcess` が
+/// エラー 123（構文が違う）で失敗するので、空なら現在のフォルダに倒す。
 fn resolve_working_dir(
     item: &MenuItem,
     exe_path: &Path,
@@ -75,6 +79,7 @@ fn resolve_working_dir(
         return exe_path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
+            .filter(|dir| !dir.is_empty())
             .unwrap_or_else(|| ".".to_string());
     }
 
@@ -118,6 +123,18 @@ fn all_mode_args(base_args: &[String], targets: &[Target], ctx: &RunContext) -> 
 mod tests {
     use super::*;
     use crate::config::parse;
+
+    /// `notepad.exe` のように区切りを含まない名前では、親が `None` ではなく
+    /// **空文字列**として取れる。そのまま作業フォルダに渡すと `CreateProcess` が
+    /// エラー 123（構文が違う）で失敗するので、現在のフォルダに倒す
+    #[test]
+    fn 区切りのない実行ファイルでも作業フォルダが空にならない() {
+        let config = parse("[.txt]\nA | notepad.exe").config;
+        let targets = vec![Target::from_path(PathBuf::from("C:\\x\\y.txt"))];
+        let invocations = resolve_invocations(&config.apps[0], &targets, &RunContext::for_test());
+        assert_eq!(invocations[0].working_dir, ".");
+    }
+
     #[test]
     fn 管理者指定は起動の組み立てに伝わる() {
         let config = parse("[.txt]\nA | C:\\Windows\\notepad.exe\n :admin").config;

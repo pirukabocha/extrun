@@ -7,7 +7,7 @@ use crate::confirm::{ask_prompts, confirm_execution};
 use crate::filter::filter_menu_items;
 use crate::icon::IconCache;
 use crate::invoke::resolve_invocations;
-use crate::launch::{launch_all, remaining_paths, show_spawn_error};
+use crate::launch::{launch_all, remaining_paths, searched_on_path, show_spawn_error};
 use crate::placeholder::{PathPlaceholders, RunContext};
 use crate::progress;
 use crate::Target;
@@ -460,8 +460,10 @@ fn execute_command(item: &MenuItem, targets: &[Target], delay: u32, confirm_over
         return;
     }
 
+    // 区切りを含まない名前は PATH から探されるので、ここで存在を確かめない
+    // （確かめるとカレントフォルダ基準になり、PATH にあるものまで撥ねてしまう）
     let exe_path = PathBuf::from(&item.path);
-    if !exe_path.exists() {
+    if !searched_on_path(&exe_path) && !exe_path.exists() {
         show_error_dialog(
             "エラー",
             &format!("実行ファイルが見つかりません:\n{}", exe_path.display()),
