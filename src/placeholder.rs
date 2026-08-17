@@ -24,6 +24,11 @@ use std::path::Path;
 pub struct RunContext {
     /// `$t{...}` が使う時刻
     pub now: LocalTime,
+    /// 選ばれた対象の総数（`$c`）
+    ///
+    /// 対象をまたいで変わらないのでここに置く。`$i` のゼロ埋めの桁も
+    /// この値から決まる（10 個なら 2 桁、100 個なら 3 桁）。
+    pub total: usize,
     /// `$?{...}` の答え
     ///
     /// 見出しは `$?int{長辺=1280}` のように**書かれたとおりの文字列全体**。
@@ -36,9 +41,10 @@ pub struct RunContext {
 
 impl RunContext {
     /// 実行時の値をここで確定させる
-    pub fn capture() -> Self {
+    pub fn capture(total: usize) -> Self {
         RunContext {
             now: LocalTime::now(),
+            total,
             prompts: RefCell::new(Vec::new()),
         }
     }
@@ -48,7 +54,17 @@ impl RunContext {
     pub fn for_test() -> Self {
         RunContext {
             now: crate::datetime::test_time(),
+            total: 1,
             prompts: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// 総数を差し替えた実行時コンテキスト（テスト用）
+    #[cfg(test)]
+    pub fn for_test_with_total(total: usize) -> Self {
+        RunContext {
+            total,
+            ..RunContext::for_test()
         }
     }
 
@@ -71,6 +87,76 @@ impl RunContext {
     }
 }
 
+/// `$i{000}` / `$c{000}` の桁の指定を読む（桁数と、`{...}` のバイト数）
+///
+/// 中に書けるのは `0` だけ。並べた個数がそのまま桁数になる。**数字で桁を書く
+/// 記法（`$i{3}`）を用意しないのは、`$t{yyyy}` と同じで「見たままの形が出る」
+/// 方が読み間違えないため。**
+fn counter_width(text: &str, at: usize) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    if bytes.get(at) != Some(&b'{') {
+        return None;
+    }
+
+    let mut cursor = at + 1;
+    while bytes.get(cursor) == Some(&b'0') {
+        cursor += 1;
+    }
+
+    // `0` が 1 つも無い（`$i{}`）か、`0` 以外が混じっていれば桁の指定ではない
+    if cursor == at + 1 || bytes.get(cursor) != Some(&b'}') {
+        return None;
+    }
+
+    Some((cursor - at - 1, cursor + 1 - at))
+}
+
+/// 十進の桁数（0 でも 1 桁とする）
+fn digits(value: usize) -> usize {
+    let mut digits = 1;
+    let mut rest = value / 10;
+    while rest > 0 {
+        digits += 1;
+        rest /= 10;
+    }
+    digits
+}
+
+/// `$i{...}` / `$c{...}` の書式を検証し、最初に見つかった問題を返す
+///
+/// 引数はエスケープを解決する前に渡ってくるので、`^$` は飛ばす。
+pub fn validate(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'^' && i + 1 < bytes.len() {
+            i += 2;
+            continue;
+        }
+
+        // `{` が続かないただの `$i` / `$c` は桁の指定なしなので何も言わない
+        if bytes[i] != b'$'
+            || !matches!(bytes.get(i + 1), Some(b'i') | Some(b'c'))
+            || bytes.get(i + 2) != Some(&b'{')
+        {
+            i += 1;
+            continue;
+        }
+
+        if counter_width(text, i + 2).is_none() {
+            let letter = bytes[i + 1] as char;
+            return Some(format!(
+                "${letter}{{}} の桁は 0 を並べて書きます（例: ${letter}{{000}}）"
+            ));
+        }
+
+        i += 2 + counter_width(text, i + 2).map_or(0, |(_, len)| len);
+    }
+
+    None
+}
+
 /// パスのプレースホルダー置換情報
 pub struct PathPlaceholders {
     pub p: String,  // フルパス
@@ -80,6 +166,11 @@ pub struct PathPlaceholders {
     pub a: String,  // 拡張子なしファイル名
     pub f: String,  // 親ディレクトリ名
     pub e: String,  // 拡張子
+    /// 何番目の対象か（1 始まり。`$i`）
+    ///
+    /// **既定は 1。** `:dir` や `:confirm` は最初の対象を基準に解決するので、
+    /// そのまま 1 でよい。対象ごとに起動する経路だけが `at()` で差し替える。
+    index: usize,
 }
 
 impl PathPlaceholders {
@@ -109,6 +200,7 @@ impl PathPlaceholders {
                 a: file_name,
                 f: parent_name,
                 e: String::new(),
+                index: 1,
             }
         } else {
             let stem = path
@@ -133,8 +225,15 @@ impl PathPlaceholders {
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_string(),
+                index: 1,
             }
         }
+    }
+
+    /// 何番目の対象かを差し替える（1 始まり）
+    pub fn at(mut self, index: usize) -> Self {
+        self.index = index;
+        self
     }
 
     /// `$` に続く記号に対応する置換値と、記号のバイト数を返す
@@ -186,6 +285,22 @@ impl PathPlaceholders {
                         None => i += 1,
                     }
                 }
+                // `$i`（何番目か）と `$c`（総数）。桁は `$i{000}` で明示できる
+                b'$' if matches!(bytes.get(i + 1), Some(b'i') | Some(b'c')) => {
+                    let is_index = bytes[i + 1] == b'i';
+                    let (width, spec_len) = match counter_width(text, i + 2) {
+                        Some((width, len)) => (width, len),
+                        // 桁の指定が無ければ、総数の桁に合わせる。`$c` そのものは
+                        // 埋めない（`page_$i_of_$c` が `01_of_10` になる）
+                        None => (if is_index { digits(ctx.total) } else { 1 }, 0),
+                    };
+
+                    out.push_str(&text[chunk..i]);
+                    let value = if is_index { self.index } else { ctx.total };
+                    out.push_str(&format!("{:0width$}", value, width = width));
+                    i += 2 + spec_len;
+                    chunk = i;
+                }
                 // `$?{...}` は起動より前に答えを集めてある。ここは引くだけ。
                 // 書き方の解釈は prompt.rs に任せる（決まりの語や中の `$t{...}` を
                 // 数え違えないよう、終端の探し方をひとつにしておく）
@@ -226,6 +341,66 @@ impl PathPlaceholders {
     /// 引数リスト内のプレースホルダーを置換
     pub fn replace_args(&self, args: &[String], ctx: &RunContext) -> Vec<String> {
         args.iter().map(|arg| self.replace(arg, ctx)).collect()
+    }
+}
+
+#[cfg(test)]
+mod counter_tests {
+    use super::*;
+
+    fn at(index: usize, total: usize, text: &str) -> String {
+        PathPlaceholders::from_path(Path::new("C:\\x\\y.txt"))
+            .at(index)
+            .replace(text, &RunContext::for_test_with_total(total))
+    }
+
+    /// 桁を書かなければ総数に合わせて埋める（並び順が崩れないように）
+    #[test]
+    fn 連番は総数の桁に合わせて埋まる() {
+        assert_eq!(at(1, 9, "page_$i.png"), "page_1.png");
+        assert_eq!(at(1, 10, "page_$i.png"), "page_01.png");
+        assert_eq!(at(10, 10, "page_$i.png"), "page_10.png");
+        assert_eq!(at(7, 100, "page_$i.png"), "page_007.png");
+    }
+
+    /// 総数そのものは埋めない（`01_of_10` になってほしい）
+    #[test]
+    fn 総数はそのまま出る() {
+        assert_eq!(at(1, 10, "$i_of_$c"), "01_of_10");
+        assert_eq!(at(3, 3, "$i/$c"), "3/3");
+    }
+
+    #[test]
+    fn 桁を明示できる() {
+        assert_eq!(at(1, 3, "page_$i{000}.png"), "page_001.png");
+        assert_eq!(at(1, 3, "$c{000}"), "003");
+        // 総数より多い桁も書ける
+        assert_eq!(at(2, 2, "$i{00000}"), "00002");
+    }
+
+    /// `$t` が `$t{` のときだけ日時なのと同じで、素の `{` は素通しする
+    #[test]
+    fn 桁の指定でない中括弧は素通しする() {
+        assert_eq!(at(1, 1, "$i{}"), "1{}");
+        assert_eq!(at(1, 1, "$c-{a}"), "1-{a}");
+    }
+
+    #[test]
+    fn エスケープした連番は置換されない() {
+        assert_eq!(at(5, 9, "^$i"), "$i");
+        assert_eq!(at(5, 9, "^$c{000}"), "$c{000}");
+    }
+
+    /// 書式の誤りは黙って通さない（`--check` で拾う）
+    #[test]
+    fn 桁の書き間違いはエラー() {
+        assert!(validate("$i{3}").is_some_and(|m| m.contains("0 を並べて書きます")));
+        assert!(validate("$c{00x}").is_some());
+        // 桁を書かない `$i` と、正しい桁の指定は通る
+        assert!(validate("page_$i.png").is_none());
+        assert!(validate("$i{000}_$c{000}").is_none());
+        // エスケープした先は見ない
+        assert!(validate("^$i{3}").is_none());
     }
 }
 

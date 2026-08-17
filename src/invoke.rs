@@ -53,9 +53,14 @@ pub fn resolve_invocations(
 
     targets
         .iter()
-        .map(|target| Invocation {
+        .enumerate()
+        .map(|(index, target)| Invocation {
             program: exe_path.clone(),
-            args: PathPlaceholders::from_path(&target.path).replace_args(&item.args, ctx),
+            // `$i` は 1 始まり。総数は `RunContext` が持っているので、
+            // ゼロ埋めの桁もここで数え直す必要はない
+            args: PathPlaceholders::from_path(&target.path)
+                .at(index + 1)
+                .replace_args(&item.args, ctx),
             working_dir: working_dir.clone(),
             admin: item.admin,
         })

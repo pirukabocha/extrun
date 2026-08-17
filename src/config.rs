@@ -1162,7 +1162,9 @@ fn build_item(
     }
 
     for (text_line, text) in checked {
-        let problem = crate::datetime::validate(text).or_else(|| crate::prompt::validate(text));
+        let problem = crate::datetime::validate(text)
+            .or_else(|| crate::prompt::validate(text))
+            .or_else(|| crate::placeholder::validate(text));
         if let Some(message) = problem {
             diags.push(Diag::error(text_line, message));
         }

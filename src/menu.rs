@@ -475,7 +475,7 @@ fn execute_command(item: &MenuItem, targets: &[Target], delay: u32, confirm_over
 
     // 日時はここで 1 回だけ確定させる。対象ごとに取り直すと、個別に起動した
     // ときに $t{ss} がずれて、まとめて作ったはずのファイル名が揃わなくなる
-    let ctx = RunContext::capture();
+    let ctx = RunContext::capture(targets.len());
 
     // 入力を先に済ませる。あとの確認ダイアログで、入力した値が入った状態の
     // メッセージを見せられる（`:confirm 長辺 $?{幅} に縮小します` が書ける）

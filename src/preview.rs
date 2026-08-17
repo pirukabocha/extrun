@@ -42,7 +42,11 @@ pub fn run(config_path: &Path, targets: &[Target]) -> i32 {
 
     // 実行するときと同じように、ここで 1 回だけ確定させる。表示される日時は
     // プレビューを実行した時刻になる
-    console::print(&report(&parsed.config, targets, &RunContext::capture()));
+    console::print(&report(
+        &parsed.config,
+        targets,
+        &RunContext::capture(targets.len()),
+    ));
     0
 }
 
