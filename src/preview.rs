@@ -63,7 +63,10 @@ fn report(config: &Config, targets: &[Target], ctx: &RunContext) -> String {
 
     let items = filter_menu_items(&config.apps, targets);
     if items.is_empty() {
-        out.push_str("\r\n対象となるファイルに適用できるメニュー項目がありません。\r\n");
+        out.push_str("\r\n");
+        // コンソールに出すので改行は CRLF に直す
+        out.push_str(&crate::filter::empty_menu_message(targets).replace('\n', "\r\n"));
+        out.push_str("\r\n");
         return out;
     }
 

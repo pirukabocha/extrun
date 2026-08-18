@@ -82,10 +82,7 @@ pub fn create_and_show_menu(config: &Config, targets: &[Target]) {
     let filtered_apps = filter_menu_items(&config.apps, targets);
 
     if filtered_apps.is_empty() {
-        show_error_dialog(
-            "情報",
-            "対象となるファイルに適用できるメニュー項目がありません。",
-        );
+        show_error_dialog("情報", &crate::filter::empty_menu_message(targets));
         return;
     }
 
