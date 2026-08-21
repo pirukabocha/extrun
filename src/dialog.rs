@@ -116,13 +116,38 @@ pub fn title_for(name: &str) -> String {
     format!("{} ― {}", shortened, TITLE)
 }
 
+/// `DLGTEMPLATE` の中で項目の数が入っている位置（ワード単位）
+///
+/// スタイル（2 ワード）と拡張スタイル（2 ワード）の直後という**固定位置**。
+const ITEM_COUNT_INDEX: usize = 4;
+
 /// `DLGTEMPLATE` の見出しを書き込む
 ///
-/// 項目の数は先に確定させておく必要がある（あとから数えて書き戻せない位置にある）。
-pub fn push_header(words: &mut Vec<u16>, item_count: u16, width: i16, height: i16, title: &str) {
-    push_u32(words, STYLE_DIALOG);
-    push_u32(words, 0); // 拡張スタイル
-    words.push(item_count);
+/// **項目の数は渡さない。`push_item` が数える。** かつてはここに書く決まりに
+/// していたが、項目を 1 つ足したときに直し忘れると
+/// `DialogBoxIndirectParamW` が `-1` を返すだけで理由が出ない（実際に踏んだ）。
+/// `cdit` は固定位置にあるので、あとから書き戻せる。
+pub fn push_header(words: &mut Vec<u16>, width: i16, height: i16, title: &str) {
+    push_header_with(words, 0, 0, width, height, title);
+}
+
+/// スタイルを足した `DLGTEMPLATE` の見出しを書き込む
+///
+/// アプリの本体になるウィンドウ（`extrun-make`）には、
+/// `WS_MINIMIZEBOX` と `WS_EX_APPWINDOW` が要る。**後者が無いと
+/// タスクバーにボタンが出ない**（オーナーの無い `WS_POPUP` のため）。
+/// 一瞬で消えるダイアログには要らないので、既定は 0。
+pub fn push_header_with(
+    words: &mut Vec<u16>,
+    extra_style: u32,
+    ex_style: u32,
+    width: i16,
+    height: i16,
+    title: &str,
+) {
+    push_u32(words, STYLE_DIALOG | extra_style);
+    push_u32(words, ex_style);
+    words.push(0); // 項目の数。push_item が増やす
     push_i16(words, 0); // x（DS_CENTER で無視される）
     push_i16(words, 0); // y
     push_i16(words, width);
@@ -162,6 +187,9 @@ pub fn push_item(
     push_str(words, text);
 
     words.push(0); // 生成データなし
+
+    // 見出しに書いた項目の数を増やす。呼び出し側に数えさせない
+    words[ITEM_COUNT_INDEX] += 1;
 }
 
 pub fn push_u32(words: &mut Vec<u16>, value: u32) {

@@ -93,6 +93,62 @@ pub(crate) fn unescape(text: &str) -> String {
     out
 }
 
+/// 名前欄に書ける形にする（`unescape_name` の逆）
+///
+/// **設定ファイルを組み立てる `extrun-make` のためのもの。** ExtRun 本体は
+/// 読む側なので使わない。同じファイルに置いてあるのは、`SPECIALS` の定義から
+/// 離すと「片方だけ直す」事故がまた起きるから。
+///
+/// 掛けるのは**その欄で実際に意味を持つ文字だけ**にしてある。`+` や `-` や
+/// `#` まで機械的に潰すと「C++ で開く」が `C^+^+ で開く` になり、貼り付ける人が
+/// 読めなくなる（このツールの目的からすると本末転倒）。
+///
+/// - どこにあっても意味を持つ: `^`（エスケープ）/ `@`（別名）/ `|`（欄の区切り）
+///   / `&`（アクセスキー）/ `[` `]`（項目ごとの対象指定）
+/// - **行頭にあるときだけ**意味を持つ: `>` `+` `-` `#` `:`（行頭マーカーと
+///   コメントと名前付きフィールド）
+///
+/// 正しさは字面ではなく**実際のパーサを通した往復**で担保する
+/// （`extrun-make` 側に、組み立て → `config::parse` → 名前が一致、のテストがある）。
+pub fn escape_name(text: &str) -> String {
+    escape_with(text, b"^@|&[]", b">+-#:")
+}
+
+/// パス欄（実行ファイル・`:icon`）に書ける形にする
+///
+/// パス欄は `unescape` を通るだけで、アクセスキーも行頭マーカーも見られない。
+/// `&` や `+` を含むフォルダ名をそのまま書けるよう、対象は 5 つに絞る。
+///
+/// **`%` は対象外**。`%NAME%` の展開はパス欄の機能なので、潰すと
+/// `%LOCALAPPDATA%` が書けなくなる。
+pub fn escape_path(text: &str) -> String {
+    escape_with(text, b"^@|[]", b"")
+}
+
+/// `always` の文字は全部、`leading` の文字は先頭にあるときだけ `^` を付ける
+///
+/// 「先頭」は**空白を読み飛ばした最初の文字**。パーサが行頭の空白を無視するので、
+/// 位置で数えると ` > 開く` のような名前がマーカーとして読まれてしまう。
+fn escape_with(text: &str, always: &[u8], leading: &[u8]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at_start = true;
+
+    for ch in text.chars() {
+        let byte = if ch.is_ascii() { ch as u8 } else { 0 };
+
+        if always.contains(&byte) || (at_start && leading.contains(&byte)) {
+            out.push('^');
+        }
+        out.push(ch);
+
+        if !ch.is_whitespace() {
+            at_start = false;
+        }
+    }
+
+    out
+}
+
 /// `%NAME%` を環境変数の値に置き換える（パス用）
 ///
 /// パスを書く欄でだけ使う。引数欄で展開すると `cmd.exe /c` に渡す
@@ -418,5 +474,78 @@ mod tests {
     #[test]
     fn 不正なutf8は拒否される() {
         assert!(decode_utf8(&[0x82, 0xA0]).is_none());
+    }
+
+    // --- エスケープを掛ける方向（extrun-make 用） ---
+
+    #[test]
+    fn 名前欄でどこにあっても潰す文字() {
+        assert_eq!(escape_name("Q&A"), "Q^&A");
+        assert_eq!(escape_name("a|b"), "a^|b");
+        assert_eq!(escape_name("mail@例"), "mail^@例");
+        assert_eq!(escape_name("^"), "^^");
+        assert_eq!(escape_name("[1]"), "^[1^]");
+    }
+
+    /// 「C++ で開く」が「C^+^+ で開く」になっては、貼る人が読めない
+    #[test]
+    fn 名前欄の途中の記号はそのまま残す() {
+        assert_eq!(escape_name("C++ で開く"), "C++ で開く");
+        assert_eq!(escape_name("PNG - JPEG"), "PNG - JPEG");
+        assert_eq!(escape_name("注意: 上書き"), "注意: 上書き");
+        assert_eq!(escape_name("ページ #1 を開く"), "ページ #1 を開く");
+    }
+
+    #[test]
+    fn 名前欄の行頭の記号は潰す() {
+        assert_eq!(escape_name("> 開く"), "^> 開く");
+        assert_eq!(escape_name("+ まとめる"), "^+ まとめる");
+        assert_eq!(escape_name("---"), "^---");
+        assert_eq!(escape_name("# コメント"), "^# コメント");
+        assert_eq!(escape_name(":dir"), "^:dir");
+    }
+
+    /// パーサは行頭の空白を読み飛ばすので、位置で数えるとマーカーが素通りする
+    #[test]
+    fn 空白の後ろも行頭とみなす() {
+        assert_eq!(escape_name("  > 開く"), "  ^> 開く");
+    }
+
+    #[test]
+    fn パス欄はアクセスキーも行頭マーカーも見ない() {
+        assert_eq!(
+            escape_path(r"C:\Program Files (x86)\a&b\x.exe"),
+            r"C:\Program Files (x86)\a&b\x.exe"
+        );
+        assert_eq!(escape_path(r"C:\dir-1\+new\x.exe"), r"C:\dir-1\+new\x.exe");
+        assert_eq!(escape_path(r"C:\a^b\x.exe"), r"C:\a^^b\x.exe");
+        assert_eq!(escape_path(r"C:\a@b\x.exe"), r"C:\a^@b\x.exe");
+    }
+
+    /// `%LOCALAPPDATA%` が書けなくなるので `%` は対象にしない
+    #[test]
+    fn パス欄の環境変数は潰さない() {
+        assert_eq!(
+            escape_path(r"%LOCALAPPDATA%\app.exe"),
+            r"%LOCALAPPDATA%\app.exe"
+        );
+    }
+
+    /// 掛けたものは必ず解ける（`unescape` は `SPECIALS` 全部を戻す）
+    #[test]
+    fn 掛けたエスケープは解いて元に戻る() {
+        let 元 = ["Q&A", "C++ で開く", "> 開く", "^@|[]&", "---", "a|b^c@d"];
+        for text in 元 {
+            assert_eq!(unescape(&escape_name(text)), text, "{}", text);
+            assert_eq!(unescape(&escape_path(text)), text, "{}", text);
+        }
+    }
+
+    /// 名前欄はアクセスキーの読み取りも通るので、そちらでも元に戻る必要がある
+    #[test]
+    fn 名前欄はアクセスキーを持たない形に戻る() {
+        let (名前, キー) = unescape_name(&escape_name("Q&A"));
+        assert_eq!(名前, "Q&A");
+        assert_eq!(キー, None);
     }
 }

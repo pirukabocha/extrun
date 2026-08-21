@@ -218,7 +218,6 @@ fn build_template(name: &str, wait: bool) -> Vec<u32> {
 
     push_header(
         &mut words,
-        5,
         DIALOG_WIDTH,
         dialog_height,
         &dialog::title_for(name),
@@ -544,16 +543,8 @@ fn build_summary_template(lines: &[String; 3], has_paths: bool) -> Vec<u32> {
     let button_y = MARGIN + (LINE_HEIGHT + LINE_GAP) * lines.len() as i16 + MARGIN - LINE_GAP;
     let dialog_height = button_y + BUTTON_HEIGHT + MARGIN;
     let content_width = DIALOG_WIDTH - MARGIN * 2;
-    let item_count = lines.len() as u16 + if has_paths { 2 } else { 1 };
-
     // 要約はすぐ閉じられるので、題名は素の「ExtRun」でよい
-    push_header(
-        &mut words,
-        item_count,
-        DIALOG_WIDTH,
-        dialog_height,
-        dialog::TITLE,
-    );
+    push_header(&mut words, DIALOG_WIDTH, dialog_height, dialog::TITLE);
 
     for (index, line) in lines.iter().enumerate() {
         push_item(
