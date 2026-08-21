@@ -16,7 +16,7 @@ cargo clippy --all-targets
 cargo fmt --check
 ```
 
-同じ内容を GitHub Actions（[ci.yml](../.github/workflows/ci.yml)）が `windows-latest` で実行します。テストが `extrun-config.txt` をフィクスチャとして読むので、サンプル設定の書式エラーも CI で検出されます。**画面が要るテスト（`#[ignore]` 付き）も CI で毎回走ります**（`cargo test -- --ignored --test-threads=1`）。
+同じ内容を GitHub Actions（[ci.yml](../.github/workflows/ci.yml)）が `windows-latest` で実行します。テストが同梱サンプルと `tests/fixtures/full-config.txt` の両方を読むので、設定ファイルの書式エラーも CI で検出されます。**画面が要るテスト（`#[ignore]` 付き）も CI で毎回走ります**（`cargo test -- --ignored --test-threads=1`）。
 
 > [!IMPORTANT]
 > **リリースビルドにはコンソールがありません。** `build.rs` がリリース時だけ `/SUBSYSTEM:WINDOWS` を指定するため、`println!` / `eprintln!` の出力はどこにも出ません。同じ理由で、リリースバイナリを PowerShell から起動しても**終了を待たず**、`$LASTEXITCODE` も設定されません。`--check` の終了コードを見るときは `Start-Process -Wait -PassThru` の `ExitCode` を使ってください（コマンドプロンプトは待つので `%errorlevel%` がそのまま使えます）。
@@ -57,22 +57,26 @@ extrun/
 │   └── console.rs      # コンソールへの出力
 ├── docs/
 │   ├── extrun-config-format.md # 設定ファイルの仕様
-│   ├── extrun-recipes.md       # 外部アプリを使った設定例集
+│   ├── extrun-recipes.md       # 実用的な設定例集（3 章は追加インストール不要）
 │   ├── development.md          # このファイル
 │   └── images/                 # README で使う画像
 ├── packaging/
 │   ├── build-release.ps1       # 配布用 zip の作成
 │   └── readme.txt              # 配布物に同梱する説明書
+├── tests/fixtures/
+│   └── full-config.txt         # 書式を一通り使ったテスト用フィクスチャ（配布しない）
 ├── .github/workflows/
-│   ├── ci.yml                  # fmt / clippy / test / 実機テスト / サンプル設定の --check
+│   ├── ci.yml                  # fmt / clippy / test / 実機テスト / 設定ファイルの --check
 │   └── release.yml             # タグから zip を作って下書き Release に添付
 ├── build.rs                    # サブシステムと VERSIONINFO
-├── extrun-config.txt           # サンプル設定（兼テスト用フィクスチャ）
+├── extrun-config.txt           # 同梱するサンプル設定（最小限）
 ├── CHANGELOG.md
 └── README.md
 ```
 
-`extrun-config.txt` は**サンプルであると同時に `menu.rs` のテストフィクスチャ**です。編集するとメニュー構造のテストが落ちるので、期待値も合わせて更新してください。
+設定ファイルは 2 つあります。**`extrun-config.txt` は配布物に入る同梱サンプル**で、初めて開く人が読み通せる最小限の内容に保ちます。**`tests/fixtures/full-config.txt` は書式を一通り使ったテストフィクスチャ**で、配布物には入りません。`filter.rs` のテストは両方をパースし、後者についてはメニュー構造（項目数と並び順）まで突き合わせるので、編集したら期待値も合わせて更新してください。
+
+書式の実例を足したくなったら、フィクスチャではなく [extrun-recipes.md](extrun-recipes.md) の方に書きます（利用者が読める場所にあるのはそちらです）。
 
 ## リリース用パッケージの作成
 
@@ -91,7 +95,7 @@ zip の中身:
 extrun-<version>/
 ├── extrun.exe
 ├── readme.txt                 # packaging/readme.txt。README.md とは別物
-├── extrun-config.sample.txt   # extrun-config.txt をリネームしたもの
+├── extrun-config.sample.txt   # extrun-config.txt をリネームしたもの（最小限のサンプル）
 ├── extrun-config-format.md    # docs/ から。zip の中ではフラットに並べる
 ├── extrun-recipes.md          # 同上
 ├── CHANGELOG.md
@@ -125,7 +129,7 @@ extrun-<version>/
 
 ## テスト
 
-パーサ、日時の書式、プレースホルダーとエスケープの相互作用、入力欄の書式、`--preview` の整形、アイコンのビットマップ、`--check` の各警告、コマンドライン引数の切り出し、そして `extrun-config.txt` から構築されるメニュー構造を検査します。
+パーサ、日時の書式、プレースホルダーとエスケープの相互作用、入力欄の書式、`--preview` の整形、アイコンのビットマップ、`--check` の各警告、コマンドライン引数の切り出し、そして `tests/fixtures/full-config.txt` から構築されるメニュー構造を検査します。
 
 ```powershell
 cargo test              # 通常のテスト

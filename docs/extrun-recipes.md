@@ -1,6 +1,9 @@
 # ExtRun レシピ集
 
-同梱のサンプル設定 `extrun-config.txt` は「追加インストールなしで動く」ことを優先したため、Windows 標準のコマンドだけで書かれています。このドキュメントは、そこから外した**実際に使っているアプリの設定例**をまとめたものです。
+同梱のサンプル設定 `extrun-config.txt` は、初めて開く人が読み通せるように最小限まで削ってあります。このドキュメントは、そこに入りきらなかった**実際の設定例**をまとめたものです。
+
+- **[3. Windows 標準コマンドだけでできること](#3-windows-標準コマンドだけでできること)** — 追加インストールなしで使えます。サンプルの次に読む場所です。
+- **4 章以降** — ffmpeg・ImageMagick・7-Zip など、実際に使っているアプリの設定例です。
 
 書式そのものの仕様は `extrun-config-format.md` を参照してください。ここでは「よくあるアプリを、どう書くか」だけを扱います。
 
@@ -17,14 +20,15 @@
 
 - [1. レシピの読み方](#1-レシピの読み方)
 - [2. つまずきやすいところ](#2-つまずきやすいところ)
-- [3. ffmpeg — 動画・音声](#3-ffmpeg--動画音声)
-- [4. ImageMagick / IrfanView — 画像](#4-imagemagick--irfanview--画像)
-- [5. 7-Zip — 圧縮・展開](#5-7-zip--圧縮展開)
-- [6. VS Code — 開く・比べる](#6-vs-code--開く比べる)
-- [7. VLC — 再生する](#7-vlc--再生する)
-- [8. ターミナル / WSL / Git — フォルダで作業を始める](#8-ターミナル--wsl--git--フォルダで作業を始める)
-- [9. Pandoc — 文書を変換する](#9-pandoc--文書を変換する)
-- [10. 画像最適化 — oxipng / pngquant / cwebp](#10-画像最適化--oxipng--pngquant--cwebp)
+- [3. Windows 標準コマンドだけでできること](#3-windows-標準コマンドだけでできること)
+- [4. ffmpeg — 動画・音声](#4-ffmpeg--動画音声)
+- [5. ImageMagick / IrfanView — 画像](#5-imagemagick--irfanview--画像)
+- [6. 7-Zip — 圧縮・展開](#6-7-zip--圧縮展開)
+- [7. VS Code — 開く・比べる](#7-vs-code--開く比べる)
+- [8. VLC — 再生する](#8-vlc--再生する)
+- [9. ターミナル / WSL / Git — フォルダで作業を始める](#9-ターミナル--wsl--git--フォルダで作業を始める)
+- [10. Pandoc — 文書を変換する](#10-pandoc--文書を変換する)
+- [11. 画像最適化 — oxipng / pngquant / cwebp](#11-画像最適化--oxipng--pngquant--cwebp)
 - [付録 A. 書式の逆引き](#付録-a-書式の逆引き)
 - [付録 B. 別名まとめ（コピペ用）](#付録-b-別名まとめコピペ用)
 - [付録 C. AutoHotkey から呼び出す](#付録-c-autohotkey-から呼び出す)
@@ -235,7 +239,251 @@ ExtRun からの一発実行は、確認ダイアログが出ないぶん事故�
 
 ---
 
-## 3. ffmpeg — 動画・音声
+## 3. Windows 標準コマンドだけでできること
+
+> 想定環境: Windows 10 / 11。**追加のインストールは要りません。**
+> PowerShell・`tar.exe`・`cmd.exe` など、Windows に最初から入っているものだけで動きます。
+
+同梱のサンプル設定は初めて開く人向けに最小限まで削ってあります。**そこから一歩進めたいときは、この節から使いたいものだけを選んで貼り足してください。** 各ブロックはセクション見出し（`[...]`）付きで、そのまま貼れる形にしてあります。
+
+PowerShell を挟むレシピが多いので、先に [2-3](#2-3-powershell-に渡すコマンドは全体を--で囲む) と [2-5](#2-5--と--と--は--でエスケープする) に目を通しておくと読みやすくなります。
+
+この節で使う別名です。
+
+```
+@win = %SystemRoot%
+@sys = @win\System32
+
+@notepad    = @win\notepad.exe
+@explorer   = @win\explorer.exe
+@cmd        = @sys\cmd.exe
+@powershell = @sys\WindowsPowerShell\v1.0\powershell.exe
+@rundll32   = @sys\rundll32.exe
+@attrib     = @sys\attrib.exe
+@tar        = @sys\tar.exe
+
+@画像     = .png .jpg .jpeg .gif .bmp .tif .tiff .ico
+@書庫     = .zip .tar .gz .tgz
+@テキスト = .txt .md .log .csv .ini .json .xml .yaml .yml
+```
+
+### 3-1. 画像の大きさを調べる
+
+```
+[@画像]
+
+画像のサイズを調べる
+ | @powershell
+ | -NoProfile -NoExit -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); '$n : ' + ^$i.Width + ' x ' + ^$i.Height; ^$i.Dispose()"
+ :wait
+```
+
+> **使用**: PowerShell ラップ / `-NoExit` / `^$`（[2-5](#2-5--と--と--は--でエスケープする)）/ `$n` / `:wait`
+> `:wait` は「前の 1 つが終わってから次を起動する」指定です。`-NoExit` のウィンドウは閉じるまで残るので、**何枚選んでもウィンドウは 1 つずつ**になり、読んで閉じると次の 1 枚が出てきます。付けないと選んだ数だけ一度に窓が開きます。
+
+### 3-2. 画像の形式を変換する
+
+`System.Drawing` は .NET Framework の一部なので、PowerShell から呼べば追加インストールなしで画像を変換できます。
+
+```
+[@画像]
+
+形式を変換
+> PNG に変換 [-.png]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
+> JPEG に変換 [-.jpg -.jpeg]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.jpg',[System.Drawing.Imaging.ImageFormat]::Jpeg); ^$i.Dispose()"
+> BMP に変換 [-.bmp]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.bmp',[System.Drawing.Imaging.ImageFormat]::Bmp); ^$i.Dispose()"
+> ---
+> 1 コマ目を PNG で取り出す [.gif]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p_frame1.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
+```
+
+> **使用**: 階層メニュー / セパレーター / `[-.png]`（引き算）/ `[.gif]`（完全置換）/ `$-p`
+> `[-.png]` は「継承した拡張子から引く」ので、元が PNG のときだけ「PNG に変換」が消えます。符号を付けない `[.gif]` は「継承を無視して置き換える」指定で、GIF のときだけ出ます。
+> 変換の品質や色数を細かく指定したいときは ImageMagick の方が向いています（[5-1](#5-1-imagemagick--形式変換)）。
+
+### 3-3. 画像を縮小する
+
+```
+[@画像]
+
+長辺 1280px に縮小する [-.ico]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$r=1280/[Math]::Max(^$i.Width,^$i.Height); if (^$r -lt 1) { ^$b=[System.Drawing.Bitmap]::new(^$i,[int](^$i.Width*^$r),[int](^$i.Height*^$r)); ^$b.Save('$d\$a_small.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$b.Dispose() }; ^$i.Dispose()"
+
+長辺を指定して縮小する [-.ico]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$r=$?int{長辺のピクセル数=1280}/[Math]::Max(^$i.Width,^$i.Height); if (^$r -lt 1) { ^$b=[System.Drawing.Bitmap]::new(^$i,[int](^$i.Width*^$r),[int](^$i.Height*^$r)); ^$b.Save('$d\$a_$?int{長辺のピクセル数=1280}px.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$b.Dispose() }; ^$i.Dispose()"
+```
+
+> **使用**: `$d` / `$a` / `$?int{...}`（[5-6](#5-6-大きさや品質をそのつど決める) も参照）/ `[-.ico]`
+> `if (^$r -lt 1)` があるので、**すでに小さい画像では何も作りません**。これが無いと拡大したり、元と同じ大きさの PNG を作ったりしてしまいます（元が JPEG だとファイルサイズがかえって増えます）。
+> `$?int{...}` は実行するときに入力欄を出す指定です。**同じ文字列を 2 か所に書いても聞かれるのは 1 回**なので、入力した値がそのまま出力先の名前にも入ります。
+
+### 3-4. 書庫を展開する・中身を見る
+
+Windows 10 1803 以降には `tar.exe` が標準で入っていて、zip / tar / tar.gz を読み書きできます（rar と 7z は非対応。それらは [6. 7-Zip](#6-7-zip--圧縮展開) へ）。
+
+```
+[@書庫]
+
+同じ名前のフォルダに展開
+ | @powershell
+ | -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$-p' ^| Out-Null; & '@sys\tar.exe' -x -f '$p' -C '$-p'"
+
+このフォルダに展開 | @tar | -x -f $p -C $d
+
+中身を一覧する
+ | @powershell
+ | -NoProfile -NoExit -Command "& '@sys\tar.exe' -t -f '$p'"
+
+CAB を展開する [.cab]
+ | @powershell
+ | -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$-p' ^| Out-Null; & '@sys\expand.exe' '$p' -F:* '$-p'"
+```
+
+> **使用**: `^|`（[2-5](#2-5--と--と--は--でエスケープする)）/ `$-p` / `$d` / `[.cab]`（完全置換）
+> 引数の中で `@tar` と書けない点に注意してください。**別名は引用符では終わらない**ので、`'@tar'` は `@tar'` という名前を探しに行きます（[2-2](#2-2-別名は引用符では終わらない)）。`'@sys\tar.exe'` のように `\` を挟んで書きます。
+> `.cab` は `tar.exe` では扱えないので、`expand.exe` に完全置換しています。
+
+### 3-5. 書庫を作る
+
+```
+[file folder]
+
+圧縮
+> ZIP
+>> 個別に圧縮 | @tar | -a -c -f $-p.zip -C $d $n
+>> + まとめて 1 つに（フォルダ構成を保持） | @tar | -a -c -f $d\archive.zip $p
+>> 日付をつけて圧縮 | @tar | -a -c -f $-p_$t{yyyyMMdd-HHmmss}.zip -C $d $n
+> TAR.GZ
+>> 個別に圧縮 | @tar | -a -c -f $-p.tar.gz -C $d $n
+>> + まとめて 1 つに（フォルダ構成を保持） | @tar | -a -c -f $d\archive.tar.gz $p
+```
+
+> **使用**: `>` `>>`（2 段のサブメニュー）/ `+`（まとめて渡す）/ `$t{...}` / `[file folder]`
+> `-C $d` で親フォルダに移動してから名前だけ（`$n`）を渡すと、**書庫の中がフラットになります**。`$p`（フルパス）をそのまま渡すとフォルダ構成ごと入ります。
+> `$t{yyyyMMdd-HHmmss}` は実行した日時です。上書きを避けたいときや、同じ操作を日をまたいで繰り返すときに使えます（[6-4](#6-4-世代を残してバックアップする) も参照）。
+
+### 3-6. テキストを数える・つなげる
+
+```
+[@テキスト]
+
+メモ帳で開く | @notepad
+ :icon @sys\imageres.dll,247
+
+文字数・行数を数える [+.bat +.cmd +.ps1]
+ | @powershell
+ | -NoProfile -NoExit -Command "'$n'; '行数 : ' + (Get-Content -LiteralPath '$p').Count; '文字数 : ' + (Get-Content -LiteralPath '$p' -Raw).Length"
+
++ まとめて 1 つのテキストに | @cmd | /c type $p > $d\merged.txt
+```
+
+> **使用**: `:icon` / `[+.bat]`（足し算）/ `+`（まとめて渡す）/ `$n` / `$d`
+> `[+.bat +.cmd +.ps1]` は「継承した拡張子に足す」指定です。`@テキスト` に入れていないスクリプト類も中身はテキストなので、この項目だけ対象に加えています。
+> `imageres.dll` には Windows 標準のアイコンが揃っています。書き方は [extrun-config-format.md](extrun-config-format.md#アイコン) を参照してください。
+
+### 3-7. ファイルのハッシュ・属性・複製
+
+```
+[file]
+
+読み取り専用・隠し属性を解除
+ | @attrib
+ | -r -s -h $p
+ :confirm $n の属性を変更します。
+
+SHA256 を書き出す
+ | @powershell
+ | -NoProfile -Command "Get-FileHash -LiteralPath '$p' -Algorithm SHA256 ^| ForEach-Object { ^$_.Hash } ^| Set-Content -LiteralPath '$-p.sha256'"
+
+ハッシュ値を選んで書き出す
+ | @powershell
+ | -NoProfile -Command "Get-FileHash -LiteralPath '$p' -Algorithm $?list{アルゴリズム=SHA256,SHA1,MD5} ^| ForEach-Object { ^$_.Hash } ^| Set-Content -LiteralPath '$-p.hash'"
+
+名前を変えて複製する
+ | @cmd
+ | /c copy "$p" "$d\$?name{新しい名前=$a}.$e"
+ :when single
+
+連番を付けて複製する
+ | @cmd
+ | /c copy "$p" "$d\$a_$i.$e"
+ :when multi
+```
+
+> **使用**: `:confirm` / `$?list{...}` / `$?name{...}` / `:when single` / `:when multi` / `$i` / `$e`
+> `$?list{...}` は打ち込ませるかわりに一覧から選ばせます。`,` で区切ったものが選択肢で、先頭が最初から選ばれています。**選べる値しか作れないので、入力の検証そのものが要りません。**
+> `:when single` は「1 つだけ選んだとき」、`:when multi` は「2 つ以上選んだとき」だけ出す指定です。名前を 1 つずつ付け直す項目は、複数選んだときに出しても困るだけなので隠しています。
+> `$i` は何番目か、`$c` は選んだ総数です。`$i` は総数の桁に合わせてゼロで埋まるので、10 個選べば `01`〜`10` になり、できたファイルの並び順が崩れません。
+> **属性を変える項目は、元のファイルを書き換える数少ない例**です。`:confirm` を付けてあります。
+
+### 3-8. フォルダを開く・中身を調べる
+
+```
+[folder]
+
+開く
+> エクスプローラで開く | @explorer | $p
+> ---
+> PowerShell で開く
+ | @powershell
+ | -NoExit -Command "Set-Location -LiteralPath '$p'"
+> コマンドプロンプトで開く | @cmd |
+ :dir $p
+> 管理者としてコマンドプロンプトを開く | @cmd |
+ :dir $p
+ :admin
+
+ファイル一覧を書き出す
+ | @powershell
+ | -NoProfile -Command "Get-ChildItem -LiteralPath '$p' -Recurse -File ^| ForEach-Object { ^$_.FullName } ^| Set-Content -LiteralPath '$d\$f-filelist.txt'"
+
+画像ファイルの数を数える
+ | @powershell
+ | -NoProfile -NoExit -Command "^$e=^@('.png','.jpg','.jpeg','.gif','.bmp'); (Get-ChildItem -LiteralPath '$p' -Recurse -File ^| Where-Object { ^$e -contains ^$_.Extension }).Count"
+
+サイズを調べる [file folder]
+ | @powershell
+ | -NoProfile -NoExit -Command "'$n'; '{0:N1} MB' -f ((Get-ChildItem -LiteralPath '$p' -Recurse -File -Force -ErrorAction SilentlyContinue ^| Measure-Object Length -Sum).Sum / 1MB)"
+```
+
+> **使用**: `:dir` / `:admin` / 行末を `|` で終える（引数なし）/ `^@`（[2-5](#2-5--と--と--は--でエスケープする)）/ `$f` / `[file folder]`
+> `^@` は「別名として解決しない `@`」です。PowerShell の配列 `@( )` をそのまま書けます。
+> `:admin` を付けると管理者として起動します。**昇格はプロセスごと**なので、複数選んで個別に起動する項目に付けると対象の数だけ UAC の確認が出ます（`+` と組み合わせるのが基本です）。
+> 一番下の「サイズを調べる」は `[folder]` セクションの中にありますが、項目側の `[file folder]` でファイルも対象にしています。**セクションの指定は「既定値」であって「絞り込み条件」ではありません。**
+
+### 3-9. どんな対象でも — パスをコピーする
+
+```
+[file folder]
+
+パスをコピーする
+ | @powershell
+ | -NoProfile -Command "Set-Clipboard -Value '$p'"
+
+親フォルダを開いて選択 [file]
+ | @explorer
+ | /select,$p
+
+プログラムから開く [file]
+ | @rundll32
+ | shell32.dll,OpenAs_RunDLL $p
+```
+
+> **使用**: `[file folder]` / `[file]`（完全置換）/ `$p`
+> 「パスをコピーする」を複数選んで使うと、1 つずつ PowerShell が起動して上書きし合うので、**最後の 1 つだけがクリップボードに残ります**。全部を入れたいときは `+` を付けたうえで、PowerShell 側で配列を組む書き方が要ります。
+
+---
+
+## 4. ffmpeg — 動画・音声
 
 > 想定バージョン: ffmpeg 6.x / 7.x（[gyan.dev](https://www.gyan.dev/ffmpeg/builds/) の full build など）
 > GUI を持たないツールなので、ExtRun から呼べることの価値が一番はっきり出ます。
@@ -245,7 +493,7 @@ ExtRun からの一発実行は、確認ダイアログが出ないぶん事故�
 @ffmpeg   = @ff\ffmpeg.exe
 ```
 
-### 3-1. まず情報を見る
+### 4-1. まず情報を見る
 
 ```
 [@動画 @音声]
@@ -258,7 +506,7 @@ ExtRun からの一発実行は、確認ダイアログが出ないぶん事故�
 > **使用**: PowerShell ラップ / `-NoExit` / `'@ff\ffprobe.exe'`（[2-2](#2-2-別名は引用符では終わらない)）
 > `:` や `,` や `=` はエスケープ不要でそのまま書けます。
 
-### 3-2. 動画を変換する
+### 4-2. 動画を変換する
 
 ```
 [@動画]
@@ -283,7 +531,7 @@ ExtRun からの一発実行は、確認ダイアログが出ないぶん事故�
 > `[-.mp4]` を付けると、元が MP4 のときだけ「MP4 にする」が消えます。H.265 のほうは出力名を `_h265` で分けているので、MP4 に対しても意味があり、引き算していません。
 > `-c:a copy` は元の音声が AAC のときだけ成功します。失敗しても直接起動では見えないので、うまくいかないときは [2-1](#2-1-黒い窓が一瞬で消えて結果が見えない) のラップ版で確かめてください。
 
-### 3-3. GIF にする
+### 4-3. GIF にする
 
 ```
 GIF にする（パレット最適化）
@@ -294,7 +542,7 @@ GIF にする（パレット最適化）
 > **使用**: 特殊文字でない記号はそのまま書ける（[2-5](#2-5--と--と--は--でエスケープする)）
 > `[` `]` `;` `,` `:` はどれもエスケープ不要です。フィルタ全体に空白が無いので、引用符で囲む必要もありません。**空白を入れると別々の引数に分かれて壊れる**点だけ注意してください。
 
-### 3-4. サムネイル・切り出し
+### 4-4. サムネイル・切り出し
 
 ```
 サムネイルを作る
@@ -311,7 +559,7 @@ GIF にする（パレット最適化）
 > `$-p_%03d.png` でも同じですが、`$d`（親フォルダ）と `$a`（拡張子なしの名前）に分けて書くと、出力先だけ別フォルダに変えたくなったときに直しやすくなります。
 > `-c copy` の切り出しはキーフレーム単位でしか切れないため、指定より少しずれます。正確に切りたい場合は再エンコード（`-c:v libx264`）にしてください。
 
-### 3-5. 回転・反転
+### 4-5. 回転・反転
 
 ```
 回転・反転
@@ -320,7 +568,7 @@ GIF にする（パレット最適化）
 > 左右反転 | @ffmpeg | -n -i $p -vf hflip  -c:a copy $-p_flip.mp4
 ```
 
-### 3-6. 音声
+### 4-6. 音声
 
 ```
 [@音声]
@@ -341,7 +589,7 @@ GIF にする（パレット最適化）
 
 ---
 
-## 4. ImageMagick / IrfanView — 画像
+## 5. ImageMagick / IrfanView — 画像
 
 > 想定バージョン: [ImageMagick](https://imagemagick.org/) 7.x（`magick.exe` の 1 本にまとまった世代）/ [IrfanView](https://www.irfanview.com/) 4.7x + 64bit 版
 > 同じ用途を CLI 派（ImageMagick）と GUI 派（IrfanView）の両方で書いてあります。両方使う必要はありません。
@@ -351,7 +599,7 @@ GIF にする（パレット最適化）
 @irfan  = C:\Program Files\IrfanView\i_view64.exe
 ```
 
-### 4-1. ImageMagick — 形式変換
+### 5-1. ImageMagick — 形式変換
 
 ```
 [@画像]
@@ -370,7 +618,7 @@ GIF にする（パレット最適化）
 > 「JPEG にする」は `.jpg` と `.jpeg` の両方を引かないと、`.jpeg` のファイルに対して自分自身への変換が出てしまいます。
 > 「PNG にする」の `+.svg +.heic` は逆向きで、**受け継いだ `@画像` に足しています**。ImageMagick は `@画像` に入れていない形式も読めるので、この項目だけ対象を広げる書き方です。同じ `[...]` の中で足し算と引き算を混ぜてよく、どちらも「受け継いだものからの差分」として扱われます（符号を付けない `[.svg]` は差分ではなく完全な置き換えになります）。SVG は Inkscape、HEIC は `libheif` のデリゲートが要るので、対応は `magick -list format` で確かめてください。
 
-### 4-2. ImageMagick — サイズと加工
+### 5-2. ImageMagick — サイズと加工
 
 ```
 サイズを変える
@@ -387,7 +635,7 @@ GIF にする（パレット最適化）
 > **使用**: 記号をそのまま書く
 > `-resize 1280x1280>` の `>`（「大きいときだけ縮小」の意味）は、行頭ではないのでサブメニューのマーカーとは解釈されません。`+repage` の `+` も同様です。
 
-### 4-3. ImageMagick — 複数選択をまとめる
+### 5-3. ImageMagick — 複数選択をまとめる
 
 ```
 + 横に並べて 1 枚にする | @magick | $p +append $d\montage.png
@@ -400,9 +648,9 @@ GIF にする（パレット最適化）
 > **使用**: `+`（まとめて 1 プロセスに渡す）/ `$?int{...}`（入力欄と決まり）
 > `$p` の位置に選択したすべてのパスが展開されるので、`magick a.png b.png c.png +append out.png` という形になります。`+` の一番分かりやすい使い道です。
 >
-> 「タイル状に並べて 1 枚にする」は横に並べる数を選んだあとに聞きます。`-tile 4x` の `x` は「横 4 枚・縦は必要なだけ」という意味なので、入力欄の値のうしろに `x` を付けたままにしてあります（`}` でプレースホルダーは終わるので、続けて書いた文字はそのまま残ります）。**同じ `$?int{横に並べる数=4}` を出力名にも書いてあるので、入力欄は 1 回しか出ず、`contact_4x.png` のように何枚並べたかがファイル名に残ります**（[4-6](#4-6-大きさや品質をそのつど決める)）。
+> 「タイル状に並べて 1 枚にする」は横に並べる数を選んだあとに聞きます。`-tile 4x` の `x` は「横 4 枚・縦は必要なだけ」という意味なので、入力欄の値のうしろに `x` を付けたままにしてあります（`}` でプレースホルダーは終わるので、続けて書いた文字はそのまま残ります）。**同じ `$?int{横に並べる数=4}` を出力名にも書いてあるので、入力欄は 1 回しか出ず、`contact_4x.png` のように何枚並べたかがファイル名に残ります**（[5-6](#5-6-大きさや品質をそのつど決める)）。
 
-### 4-4. ImageMagick — 情報を見る
+### 5-4. ImageMagick — 情報を見る
 
 ```
 画像情報を表示
@@ -412,7 +660,7 @@ GIF にする（パレット最適化）
 
 > ここでは実行ファイルを別名にせず素のパスで書いています。`'@magick'` と書くと `magick'` という別名を探しに行くためです（[2-2](#2-2-別名は引用符では終わらない)）。別名を使いたい場合は `@apps\ImageMagick\magick.exe` のように `\` を挟む形にしてください。
 
-### 4-5. IrfanView
+### 5-5. IrfanView
 
 ```
 [@画像]
@@ -435,7 +683,7 @@ IrfanView でサムネイル表示 | @irfan | /thumbs $p
 > **使用**: 型 1（渡すだけ）と型 2（CLI）の中間
 > IrfanView は GUI アプリでありながらコマンドラインオプションが豊富で、ExtRun とは相性の良い部類です。オプションについては IrfanView のインストールフォルダにある `i_options.txt` を参考にして下さい。使えるオプションはバージョンで増減するので、初回は必ず 1 枚で試してください。
 
-### 4-6. 大きさや品質をそのつど決める
+### 5-6. 大きさや品質をそのつど決める
 
 上のレシピは値を決め打ちしているので、別の大きさが欲しくなるたびに項目が増えていきます。`$?{...}` を使うと、選んだあとに入力欄が出ます。
 
@@ -468,10 +716,10 @@ IrfanView で長辺を指定して縮小
 
 ---
 
-## 5. 7-Zip — 圧縮・展開
+## 6. 7-Zip — 圧縮・展開
 
 > 想定バージョン: [7-Zip](https://www.7-zip.org/) 26.x
-> ExtRun から利用する用途としては需要が一番大きい分野です。同梱サンプルの `tar.exe` の項目を、そのまま置き換えられます。
+> ExtRun から利用する用途としては需要が一番大きい分野です。[3-4](#3-4-書庫を展開する中身を見る) / [3-5](#3-5-書庫を作る) の `tar.exe` の項目を、そのまま置き換えられます。
 
 ```
 @7z  = C:\Program Files\7-Zip\7z.exe
@@ -480,7 +728,7 @@ IrfanView で長辺を指定して縮小
 
 `7z.exe` はコンソール版、`7zG.exe` は**進捗ダイアログが出る GUI 版**です。時間のかかる操作は `7zG.exe`、結果の文字列を読みたい操作は `7z.exe` を PowerShell でラップ、と使い分けると快適です。
 
-### 5-1. 展開
+### 6-1. 展開
 
 ```
 [@書庫]
@@ -495,7 +743,7 @@ IrfanView で長辺を指定して縮小
 > **`-o` と展開先の間に空白を入れられない**のが 7-Zip の特徴です。`-o$-p` は展開すると `-oC:\work\archive` のような 1 つの引数になります。パスに空白が含まれていても、ExtRun は引数を 1 つのまとまりとして子プロセスに渡すので問題ありません。
 > `.tar.gz` のような二重拡張子は `$-p` で `.gz` しか落ちない点に注意してください（`archive.tar.gz` → `archive.tar`）。
 
-### 5-2. 中身を確認する
+### 6-2. 中身を確認する
 
 ```
 中身を一覧する
@@ -507,7 +755,7 @@ IrfanView で長辺を指定して縮小
  | -NoProfile -NoExit -Command "& 'C:\Program Files\7-Zip\7z.exe' t '$p'"
 ```
 
-### 5-3. 圧縮
+### 6-3. 圧縮
 
 ```
 [file folder]
@@ -531,7 +779,7 @@ IrfanView で長辺を指定して縮小
 > `$d\$f.zip` は「選択したものが入っているフォルダと同じ名前の zip を、その隣に作る」という意味になります（`C:\work\a.txt` を選ぶと `C:\work\work.zip`）。まとめて圧縮するときの命名として自然です。
 > パスワードは対話入力が必要なので、値を書かない `-p` を使い、PowerShell 経由で入力欄を出しています。**設定ファイルにパスワードを直接書かないでください**（`--check` の出力にも載ります）。
 
-### 5-4. 世代を残してバックアップする
+### 6-4. 世代を残してバックアップする
 
 上のレシピは同じ名前の書庫を作るので、2 回目からは上書きするか名前を聞かれます。日時を名前に入れると、実行するたびに別のファイルになります。
 
@@ -554,7 +802,7 @@ IrfanView で長辺を指定して縮小
 
 ---
 
-## 6. VS Code — 開く・比べる
+## 7. VS Code — 開く・比べる
 
 > [Visual Studio Code](https://code.visualstudio.com/) 
 > 既定ではユーザーごとの場所にインストールされます。`%LOCALAPPDATA%` を使えばユーザー名を書かずに済みます（→ [2-6](#2-6-環境変数はパス欄でだけ展開される)）。System Installer を使った場合は `%ProgramFiles%\Microsoft VS Code\Code.exe` です。
@@ -601,7 +849,7 @@ VS Code で開く                   | @code | $p
 
 ---
 
-## 7. VLC — 再生する
+## 8. VLC — 再生する
 
 > 想定バージョン: [VLC media player](https://www.videolan.org/) 3.x
 
@@ -628,7 +876,7 @@ VLC で再生                     | @vlc | $p
 
 ---
 
-## 8. ターミナル / WSL / Git — フォルダで作業を始める
+## 9. ターミナル / WSL / Git — フォルダで作業を始める
 
 フォルダを対象にした「ここで開く」系は、需要のわりに書き方の情報が少ない分野です。`:dir`（作業フォルダ）の出番でもあります。
 
@@ -675,7 +923,7 @@ Git
 
 ---
 
-## 9. Pandoc — 文書を変換する
+## 10. Pandoc — 文書を変換する
 
 > 想定バージョン: [Pandoc](https://pandoc.org/) 3.x
 > 引数が短く、拡張子の指定（継承・引き算・完全置換）の効きが分かりやすいので、書式を覚えるのにも向いています。
@@ -705,7 +953,7 @@ Markdown にする | @pandoc | $p -t gfm -o $-p.md
 
 ---
 
-## 10. 画像最適化 — oxipng / pngquant / cwebp
+## 11. 画像最適化 — oxipng / pngquant / cwebp
 
 > 想定バージョン: [oxipng](https://github.com/oxipng/oxipng) 10.x / [pngquant](https://pngquant.org/) 3.x / [cwebp](https://developers.google.com/speed/webp/download?hl=ja)
 > Web 用の画像を扱う人向け。どれも単機能の CLI なので、レシピの型 2 の練習にちょうど良い題材です。
@@ -757,27 +1005,32 @@ WebP に変換 [-.webp]
 | 書式 | 意味 | 実例のあるレシピ |
 |---|---|---|
 | `$p` | フルパス | 全編 |
-| `$-p` | 拡張子なしフルパス | [3-2](#3-2-動画を変換する) / [5-1](#5-1-展開) |
-| `$d` | 親フォルダのパス | [3-4](#3-4-サムネイル切り出し) / [5-1](#5-1-展開) |
-| `$a` | 拡張子なしの名前 | [3-4](#3-4-サムネイル切り出し)（連番サムネイル） |
-| `$f` | 親フォルダの名前 | [5-3](#5-3-圧縮)（まとめて 1 つに） |
-| `$t{...}` | 実行した日時 | [5-4](#5-4-世代を残してバックアップする) |
-| `$?{...}` | 実行時に入力欄を出す | [4-3](#4-3-imagemagick--複数選択をまとめる)（タイル状に並べる） / [4-6](#4-6-大きさや品質をそのつど決める) |
-| `[-.mp4]` | 継承した拡張子から引く | [3-2](#3-2-動画を変換する) / [4-1](#4-1-imagemagick--形式変換) |
-| `[+.svg]` | 継承した拡張子に足す | [4-1](#4-1-imagemagick--形式変換)（PNG にする） |
-| `%LOCALAPPDATA%` | 環境変数（パス欄のみ） | [2-6](#2-6-環境変数はパス欄でだけ展開される) / [6](#6-vs-code--開く比べる) / [付録 B](#付録-b-別名まとめコピペ用) |
-| `[.svg]` | 継承を無視して置き換える | [4-5](#4-5-irfanview)（フォルダ用の項目） |
-| `+` | 全パスを 1 プロセスに渡す | [4-3](#4-3-imagemagick--複数選択をまとめる) / [5-3](#5-3-圧縮) / [6](#6-vs-code--開く比べる) / [7](#7-vlc--再生する) |
-| `:dir` | 作業フォルダ | [8](#8-ターミナル--wsl--git--フォルダで作業を始める) |
-| `:confirm` | 実行前に確認する | 書式の説明は [extrun-config-format.md](extrun-config-format.md#実行前の確認) |
-| `:admin` | 管理者として実行する | 書式の説明は [extrun-config-format.md](extrun-config-format.md#管理者として実行) |
-| `:wait` | 前の 1 つが終わってから次を起動 | [6](#6-vs-code--開く比べる)（1 つずつ開いて直す） |
-| `:icon` | 項目にアイコンを出す | 書式の説明は [extrun-config-format.md](extrun-config-format.md#アイコン) |
-| `>` `>>` | サブメニュー | [3-2](#3-2-動画を変換する) / [5-3](#5-3-圧縮) |
+| `$-p` | 拡張子なしフルパス | [4-2](#4-2-動画を変換する) / [6-1](#6-1-展開) |
+| `$d` | 親フォルダのパス | [4-4](#4-4-サムネイル切り出し) / [6-1](#6-1-展開) |
+| `$a` | 拡張子なしの名前 | [4-4](#4-4-サムネイル切り出し)（連番サムネイル） |
+| `$f` | 親フォルダの名前 | [3-8](#3-8-フォルダを開く中身を調べる) / [6-3](#6-3-圧縮)（まとめて 1 つに） |
+| `$n` | 拡張子付きの名前 | [3-1](#3-1-画像の大きさを調べる) / [3-5](#3-5-書庫を作る) |
+| `$e` | 拡張子（ドットなし） | [3-7](#3-7-ファイルのハッシュ属性複製) |
+| `$i` `$c` | 何番目か・選んだ総数 | [3-7](#3-7-ファイルのハッシュ属性複製)（連番で複製） |
+| `$t{...}` | 実行した日時 | [3-5](#3-5-書庫を作る) / [6-4](#6-4-世代を残してバックアップする) |
+| `$?{...}` | 実行時に入力欄を出す | [3-3](#3-3-画像を縮小する) / [5-3](#5-3-imagemagick--複数選択をまとめる)（タイル状に並べる） / [5-6](#5-6-大きさや品質をそのつど決める) |
+| `$?list{...}` | 入力欄のかわりに一覧から選ばせる | [3-7](#3-7-ファイルのハッシュ属性複製) |
+| `[-.mp4]` | 継承した拡張子から引く | [3-2](#3-2-画像の形式を変換する) / [4-2](#4-2-動画を変換する) / [5-1](#5-1-imagemagick--形式変換) |
+| `[+.svg]` | 継承した拡張子に足す | [3-6](#3-6-テキストを数えるつなげる) / [5-1](#5-1-imagemagick--形式変換)（PNG にする） |
+| `%LOCALAPPDATA%` | 環境変数（パス欄のみ） | [2-6](#2-6-環境変数はパス欄でだけ展開される) / [7](#7-vs-code--開く比べる) / [付録 B](#付録-b-別名まとめコピペ用) |
+| `[.svg]` | 継承を無視して置き換える | [3-2](#3-2-画像の形式を変換する)（GIF だけ） / [5-5](#5-5-irfanview)（フォルダ用の項目） |
+| `+` | 全パスを 1 プロセスに渡す | [3-5](#3-5-書庫を作る) / [5-3](#5-3-imagemagick--複数選択をまとめる) / [6-3](#6-3-圧縮) / [7](#7-vs-code--開く比べる) / [8](#8-vlc--再生する) |
+| `:dir` | 作業フォルダ | [3-8](#3-8-フォルダを開く中身を調べる) / [9](#9-ターミナル--wsl--git--フォルダで作業を始める) |
+| `:confirm` | 実行前に確認する | [3-7](#3-7-ファイルのハッシュ属性複製)（属性の変更） |
+| `:admin` | 管理者として実行する | [3-8](#3-8-フォルダを開く中身を調べる)（管理者のコマンドプロンプト） |
+| `:wait` | 前の 1 つが終わってから次を起動 | [3-1](#3-1-画像の大きさを調べる)（1 枚ずつ読む） / [7](#7-vs-code--開く比べる)（1 つずつ開いて直す） |
+| `:when` | 選んだ数で出し分ける | [3-7](#3-7-ファイルのハッシュ属性複製) |
+| `:icon` | 項目にアイコンを出す | [3-6](#3-6-テキストを数えるつなげる)（`imageres.dll` の番号指定） |
+| `>` `>>` | サブメニュー | [3-2](#3-2-画像の形式を変換する) / [3-5](#3-5-書庫を作る)（2 段） / [4-2](#4-2-動画を変換する) / [6-3](#6-3-圧縮) |
 | `&` | アクセスキー | 書式の説明は [extrun-config-format.md](extrun-config-format.md#アクセスキー) |
 | `[extrun]` | グローバル設定（表示位置・初期選択） | [付録 C](#付録-c-autohotkey-から呼び出す)（`--at` での上書き） |
-| `^\|` `^$` `^@` `^&` | エスケープ | [10](#おまけ--フォルダ内の画像だけまとめる) |
-| 行末を `\|` で終える | 引数なしで起動 | [8](#8-ターミナル--wsl--git--フォルダで作業を始める)（コマンドプロンプト） |
+| `^\|` `^$` `^@` `^&` | エスケープ | [3-4](#3-4-書庫を展開する中身を見る)（`^\|`）/ [3-8](#3-8-フォルダを開く中身を調べる)（`^@`）/ [11](#おまけ--フォルダ内の画像だけまとめる) |
+| 行末を `\|` で終える | 引数なしで起動 | [3-8](#3-8-フォルダを開く中身を調べる) / [9](#9-ターミナル--wsl--git--フォルダで作業を始める)（コマンドプロンプト） |
 | 別名の中の別名 | `@ff = @tools\ffmpeg\bin` | [1-3](#1-3-別名で直す場所を-1-か所にまとめる) |
 
 ---

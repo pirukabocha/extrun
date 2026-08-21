@@ -220,8 +220,8 @@ fn config_path(override_path: Option<PathBuf>) -> Option<PathBuf> {
 /// マニフェストで宣言するのが Microsoft の推奨だが、`build.rs` が `.rc` を
 /// `OUT_DIR` に生成する構成なのでマニフェストも生成物になり、手数が増える。
 /// API なら 1 行で済み、`windows-sys` のフィーチャーが 1 つ増えるだけで
-/// 依存クレートは増えない。Windows 10 1703 以降が必要だが、同梱サンプルが
-/// `tar.exe` を使っている時点で下限はすでに 1803 なので実質の制約にならない。
+/// 依存クレートは増えない。これにより **Windows 10 1703 以降**が動作条件になる
+/// （`packaging/readme.txt` の「動作環境」はこの値を書いている）。
 fn enable_dpi_awareness() {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

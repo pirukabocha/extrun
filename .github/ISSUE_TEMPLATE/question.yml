@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        設定ファイルの書き方は [extrun-config-format.md](https://github.com/pirukabocha/extrun/blob/main/extrun-config-format.md)（仕様）と [extrun-recipes.md](https://github.com/pirukabocha/extrun/blob/main/extrun-recipes.md)（設定例集）にまとめてあります。先にそちらもご覧ください。
+        設定ファイルの書き方は [extrun-config-format.md](https://github.com/pirukabocha/extrun/blob/main/docs/extrun-config-format.md)（仕様）と [extrun-recipes.md](https://github.com/pirukabocha/extrun/blob/main/docs/extrun-recipes.md)（設定例集）にまとめてあります。先にそちらもご覧ください。
 
   - type: textarea
     id: body

@@ -35,7 +35,7 @@
 3. `extrun-config.sample.txt` をコピーして `extrun-config.txt` にリネーム
 4. 任意で「送る」メニューに登録（[下記](#windows-エクスプローラから使う)）
 
-同梱のサンプル設定は Windows 標準のコマンドだけで動くので、追加のインストールなしでそのまま試せます。
+同梱のサンプル設定は Windows 標準のコマンドだけで動く最小限の内容なので、追加のインストールなしでそのまま試せます。
 
 ソースからビルドする場合は `cargo build --release` です。詳しくは [docs/development.md](docs/development.md) を参照してください。
 
@@ -112,7 +112,7 @@ VS Code で開く | C:\Program Files\Microsoft VS Code\Code.exe | -n $p
 
 **実際のアプリでどう書くかは [docs/extrun-recipes.md](docs/extrun-recipes.md)（レシピ集）にまとめてあります。** ffmpeg・ImageMagick・IrfanView・7-Zip・VS Code・VLC・Pandoc などの設定例を、それぞれ「どの書式を使っているか」の注記付きで並べてあるので、書式の逆引きとしても使えます。外部アプリを登録するときにつまずきやすい点（コンソールが一瞬で消える、別名が引用符で終わらない、環境変数が展開されるのはパス欄だけ など）も先頭にまとめてあります。
 
-同梱の `extrun-config.sample.txt` は書式のほぼすべてを使ったサンプルで、**Windows に最初から入っているコマンドだけで動きます**（画像変換は PowerShell 経由の System.Drawing、書庫の展開は標準の `tar.exe`）。まず動かしてから、お使いのアプリのパスを書き足していくのが分かりやすいと思います。
+同梱の `extrun-config.sample.txt` は、**初めて開く人がそのまま読み通せる最小限の内容**にしてあります。まず動かして、そこにお使いのアプリを書き足していくのが分かりやすいと思います。追加インストールなしで使える一歩進んだ例は、レシピ集の [3. Windows 標準コマンドだけでできること](docs/extrun-recipes.md#3-windows-標準コマンドだけでできること) にまとめてあります。
 
 ### 書き換えたら確かめる
 
@@ -159,7 +159,7 @@ ExtRun は、`extrun-config.txt` に書かれたコマンドをそのまま起�
 | ファイル名 | 内容 |
 | --- | --- |
 | [docs/extrun-config-format.md](docs/extrun-config-format.md) | 設定ファイル形式の完全な仕様（記法の早見表つき） |
-| [docs/extrun-recipes.md](docs/extrun-recipes.md) | 外部アプリを使った設定例集と、AutoHotkey から呼び出す例 |
+| [docs/extrun-recipes.md](docs/extrun-recipes.md) | 設定例集。Windows 標準コマンドだけでできること・外部アプリの設定例・AutoHotkey から呼び出す例 |
 | [docs/development.md](docs/development.md) | ビルド環境・プロジェクト構成・リリース手順 |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |
 

@@ -15,7 +15,7 @@
         readme.txt                 packaging\readme.txt（配布専用。README.md とは別物）
         extrun-config.sample.txt   extrun-config.txt をリネームしたもの
         extrun-config-format.md    docs\ から。zip の中ではフラットに並べる
-        extrun-recipes.md          同じく docs\ から。外部アプリを使った設定例集
+        extrun-recipes.md          同じく docs\ から。実用的な設定例集
         CHANGELOG.md               更新内容（利用者向けの区分で書く。内部の変更は載せない）
         LICENSE
 
@@ -80,7 +80,7 @@ Push-Location $Root
 try {
     if (-not $SkipTests) {
         # 設定ファイルの書式エラーもここで検出される
-        # （menu.rs のテストが extrun-config.txt をパースするため）
+        # （filter.rs のテストが同梱サンプルとフィクスチャの両方をパースするため）
         Invoke-Step 'テスト' { cargo test --quiet }
     } else {
         Write-Host '==> テストを飛ばしました' -ForegroundColor Yellow

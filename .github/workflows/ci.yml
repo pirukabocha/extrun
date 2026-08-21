@@ -1,8 +1,8 @@
 # 書式・Lint・テストを windows-latest で通す。
 #
-# テストは extrun-config.txt をフィクスチャとして読むので、サンプル設定の
-# 書式エラーもここで落ちる。仕上げに、ビルドした exe で --check を実行して
-# 実際の終了コードまで確かめる。
+# テストは同梱サンプルと tests/fixtures/full-config.txt の両方をパースするので、
+# 設定ファイルの書式エラーもここで落ちる。仕上げに、ビルドした exe で --check を
+# 実行して実際の終了コードまで確かめる。
 name: CI
 
 on:
@@ -50,12 +50,15 @@ jobs:
       - name: リリースビルド
         run: cargo build --release
 
-      - name: サンプル設定を --check で検証
+      - name: 設定ファイルを --check で検証
         # extrun.exe はコンソールを持たないため、pwsh は終了を待たない。
         # 終了コードを見るには Start-Process -Wait -PassThru を使う。
+        #
+        # 同梱するサンプル（最小限）と、書式を一通り使ったフィクスチャの両方。
         run: |
-          Copy-Item extrun-config.txt target\release\
-          $proc = Start-Process .\target\release\extrun.exe -ArgumentList '--check' -Wait -PassThru -NoNewWindow
-          if ($proc.ExitCode -ne 0) {
-            throw "extrun-config.txt にエラーがあります (exit $($proc.ExitCode))"
+          foreach ($config in 'extrun-config.txt', 'tests/fixtures/full-config.txt') {
+            $proc = Start-Process ./target/release/extrun.exe -ArgumentList '--check', '--config', $config -Wait -PassThru -NoNewWindow
+            if ($proc.ExitCode -ne 0) {
+              throw "$config にエラーがあります (exit $($proc.ExitCode))"
+            }
           }

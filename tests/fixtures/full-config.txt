@@ -1,0 +1,399 @@
+# =====================================================================
+# ExtRun 設定ファイル（サンプル）
+#
+# extrun.exe と同じフォルダに extrun-config.txt という名前で配置（UTF-8）。
+# 書式の詳細は extrun-config-format.md を参照してください。
+#
+# このサンプルは Windows に最初から入っているコマンドだけで動くように
+# 作ってあります。追加のインストールなしでそのまま試せます。
+# （そのぶん内容は控えめです。お使いのアプリのパスを足していってください）
+#
+# ffmpeg / 7-Zip / ImageMagick / VS Code などを使った実用的な設定例は
+# extrun-recipes.md（レシピ集）にまとめてあります。
+#
+# 編集したら extrun.exe --check で書式を確認できます。
+# =====================================================================
+
+
+# --- アプリ全体の設定 ------------------------------------------------
+# [extrun] は拡張子の見出しではなく、ExtRun 自体のふるまいの設定です。
+# ファイルのどこに書いても全体に効きます。
+#
+# ここの値はコマンドライン引数で上書きできます。
+#
+#   extrun.exe "%1"
+#   extrun.exe --at window --select-first "%1"
+
+[extrun]
+
+# メニューを表示する位置
+#   cursor  マウスカーソルの位置（既定）
+#   window  前面ウィンドウの中央
+#   screen  画面の中央
+#   X,Y     画面座標を直接指定（例 100,200）
+menu-position = cursor
+
+# 先頭の項目を選択した状態で開くか（yes / no）
+# yes にすると、開いてすぐ Enter で先頭の項目を実行できます。
+select-first = no
+
+# メニューにアイコンを表示するか
+#   none       表示しない（:icon を書いていても）
+#   specified  :icon を書いた項目だけ表示する（既定）
+#   auto       :icon を優先し、書いていない項目は実行ファイルから取り出す
+#
+# auto は項目ごとにアイコンを読み込むぶん、開くまでが少し遅くなります。
+# また PowerShell 経由の項目が全部同じアイコンになるので、見分けたい項目に
+# :icon を書く方が効果的です。
+icons = specified
+
+# 複数のファイルを選んだときに、1 つずつの起動をどれだけ空けるか（ミリ秒）。
+# 0 なら間を空けません（既定）。10〜10000 が書けます。
+#
+# これは「同時に動く数」を抑えるものではありません。ずらして起動するだけで、
+# しばらくすれば結局すべてが同時に動きます。効くのは、2 つ目以降を 1 つ目に
+# 渡す作りのアプリ（ビューアやエディタによくあります）で、同時に叩くと
+# 取りこぼされてしまう場合です。
+#
+# 項目ごとに :delay で上書きできます。待ち時間の合計が 1 秒を超えるときは、
+# 一時停止と中止のできるダイアログが出ます。
+#
+# 「前の 1 つが終わってから次を起動する」ようにしたいときは、項目側に :wait を
+# 書きます（下の「画像のサイズを調べる」を参照）。全体の既定値はありません。
+#
+# off と書いても 0 と同じ意味になります。
+delay = 0
+
+# 何件を超えたら、起動する前に確認を出すか（既定は 20）。
+#
+# フォルダの中身を全部選んだつもりが 300 個あった、というときに、
+# プロセスが 300 個並ぶ前に止めるための歯止めです。確認には対象の一覧が
+# 出るので、選び間違いに気づけます。
+#
+# 数えるのは対象の数ではなく、起動するプロセスの数です。+（まとめて渡す）を
+# 付けた項目は、何個選んでも起動が 1 回なので確認は出ません。
+#
+# off にすると確認しません。0 は「0 件を超えたら」＝常に確認、の意味です。
+confirm-over = 20
+
+
+# --- パスの別名 ------------------------------------------------------
+# 何度も出てくるフォルダやアプリはここにまとめておくと、
+# 引っ越しのときに 1 行直すだけで済みます。
+#
+# パスの中の %...% は環境変数として展開されます（実行ファイル欄・:dir・
+# :icon のみ。引数欄では展開しません）。Windows が C: 以外に入っている
+# 環境でも正しく指せるので、決め打ちより安全です。
+
+@win = %SystemRoot%
+@sys = @win\System32
+
+@notepad    = @win\notepad.exe
+@explorer   = @win\explorer.exe
+@cmd        = @sys\cmd.exe
+@powershell = @sys\WindowsPowerShell\v1.0\powershell.exe
+@rundll32   = @sys\rundll32.exe
+@attrib     = @sys\attrib.exe
+@tar        = @sys\tar.exe
+
+
+# --- 拡張子セットの別名 ----------------------------------------------
+# セクション見出しや、項目ごとの [...] の中で使えます。
+
+@画像     = .png .jpg .jpeg .gif .bmp .tif .tiff .ico
+@音声     = .wav .mp3 .m4a .flac .wma .opus
+@動画     = .mp4 .mkv .avi .wmv .mov
+@書庫     = .zip .tar .gz .tgz
+@テキスト = .txt .md .log .csv .ini .json .xml .yaml .yml
+
+
+# =====================================================================
+# 画像
+# =====================================================================
+# 画像を扱う項目は PowerShell から .NET の System.Drawing を呼んでいます。
+# 引数全体を "..." で囲み、中では '...' を使うのがコツです。
+[@画像]
+
+# 名前の中の & は「次の 1 文字をアクセスキーにする」印です。
+# メニューが出ているあいだにその文字を押すと、その項目が実行されます。
+# キーはメニューごとに独立しているので、親と子で同じ文字を使えます。
+#
+# :icon はその項目に出すアイコン。「パス」または「パス,番号」で、番号は
+# dll や exe に複数入っているときに選びます（.reg やショートカットと同じ
+# 書き方）。imageres.dll には Windows 標準のアイコンが揃っています。
+#
+# :delay は「1 つずつの起動をこれだけ空ける」指定（ミリ秒）。既定のアプリは
+# 1 つのウィンドウを使い回すものが多く、たくさん選んで同時に叩くと後から
+# 渡したぶんが取りこぼされることがあります。少し空けると取りこぼしません。
+開く (&O)
+ :icon @sys\imageres.dll,3
+> 既定のアプリで開く (&D) | @explorer | $p
+ :delay 200
+> プログラムから開く (&P) | @rundll32 | shell32.dll,OpenAs_RunDLL $p
+
+# -NoExit を付けると実行後もウィンドウが残るので、結果を読めます。
+# $n（名前）は '...' で囲んで PowerShell の文字列にしています。
+#
+# :wait は「前の 1 つが終了してから次を起動する」指定です。:delay が起動を
+# ずらすだけなのに対し、こちらは終わるまで次を始めません。
+# -NoExit のウィンドウは閉じるまで残るので、この項目では「読んで閉じると
+# 次の 1 枚が出てくる」という進み方になります。何枚選んでもウィンドウは
+# 1 つずつです。
+画像のサイズを調べる
+ | @powershell
+ | -NoProfile -NoExit -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); '$n : ' + ^$i.Width + ' x ' + ^$i.Height; ^$i.Dispose()"
+ :wait
+
+# 名前の直後の [-...] は「継承した拡張子からの引き算」。
+# .png を対象から外すので、PNG のときだけ「PNG に変換」は出ません。
+# 逆に [+...] と書くと、継承したものに足せます（下の「文字数・行数を数える」）。
+形式を変換 (&C)
+> &PNG に変換 [-.png]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
+> &JPEG に変換 [-.jpg -.jpeg]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.jpg',[System.Drawing.Imaging.ImageFormat]::Jpeg); ^$i.Dispose()"
+> &BMP に変換 [-.bmp]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p.bmp',[System.Drawing.Imaging.ImageFormat]::Bmp); ^$i.Dispose()"
+> ---
+# 符号（+ / -）の付かない指定は「継承を無視して完全に置き換える」。
+# GIF のときだけ出ます。
+> 1 コマ目を PNG で取り出す (&F) [.gif]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$i.Save('$-p_frame1.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$i.Dispose()"
+
+# $d（親フォルダ）と $a（拡張子なしの名前）を組み合わせて出力先を作ります。
+#
+# 縮小が要らない画像（長辺が 1280px 以下）では何も作りません。拡大したり、
+# 同じ大きさの PNG を作ったりしないための if です。
+長辺 1280px に縮小する [-.ico]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$r=1280/[Math]::Max(^$i.Width,^$i.Height); if (^$r -lt 1) { ^$b=[System.Drawing.Bitmap]::new(^$i,[int](^$i.Width*^$r),[int](^$i.Height*^$r)); ^$b.Save('$d\$a_small.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$b.Dispose() }; ^$i.Dispose()"
+
+# $?{...} は実行するときに入力欄を出します。= の右は既定値で、選択された
+# 状態で入るので Enter だけで確定できます。同じ内容を 2 か所に書いても
+# 聞かれるのは 1 回なので、下では入力した値が出力先の名前にも入ります。
+# $? と { のあいだの int は「整数だけを受け付ける」指定です。
+# ほかに num（数値）と name（ファイル名に使える文字）が使えます。
+# 満たさない入力は理由を添えて聞き直されます。
+# （PowerShell の $? は中括弧が続かないのでそのまま渡ります）
+長辺を指定して縮小する [-.ico]
+ | @powershell
+ | -NoProfile -Command "Add-Type -AssemblyName System.Drawing; ^$i=[System.Drawing.Image]::FromFile('$p'); ^$r=$?int{長辺のピクセル数=1280}/[Math]::Max(^$i.Width,^$i.Height); if (^$r -lt 1) { ^$b=[System.Drawing.Bitmap]::new(^$i,[int](^$i.Width*^$r),[int](^$i.Height*^$r)); ^$b.Save('$d\$a_$?int{長辺のピクセル数=1280}px.png',[System.Drawing.Imaging.ImageFormat]::Png); ^$b.Dispose() }; ^$i.Dispose()"
+
+
+# =====================================================================
+# 音声・動画
+# =====================================================================
+# セクション見出しには別名を並べて書けます。
+[@音声 @動画]
+
+既定のアプリで再生 (&Y) | @explorer | $p
+プログラムから開く | @rundll32 | shell32.dll,OpenAs_RunDLL $p
+
+# ^| は「引数の中の縦棒」。PowerShell のパイプをそのまま書けます。
+ファイル情報を表示
+ | @powershell
+ | -NoProfile -NoExit -Command "Get-Item -LiteralPath '$p' ^| Format-List Name, Length, CreationTime, LastWriteTime"
+
+
+# =====================================================================
+# 書庫
+# =====================================================================
+# Windows 10 1803 以降には tar.exe が標準で入っていて、
+# zip / tar / tar.gz を読み書きできます（rar と 7z は非対応）。
+#
+# 別名は空白あるいは \ / | / [ / ] / ^ / @ で終わります。
+# そのため下記の引数内の '@sys\tar.exe' は '@tar' とは書けません。
+# 例のように '@sys\tar.exe' と \ を挟むか、囲まずに書きます。
+[@書庫]
+
+同じ名前のフォルダに展開 (&E)
+ | @powershell
+ | -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$-p' ^| Out-Null; & '@sys\tar.exe' -x -f '$p' -C '$-p'"
+
+このフォルダに展開 | @tar | -x -f $p -C $d
+
+中身を一覧する
+ | @powershell
+ | -NoProfile -NoExit -Command "& '@sys\tar.exe' -t -f '$p'"
+
+# .cab は tar では扱えないので expand.exe に差し替えます（完全置換）。
+CAB を展開する [.cab]
+ | @powershell
+ | -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$-p' ^| Out-Null; & '@sys\expand.exe' '$p' -F:* '$-p'"
+
+
+# =====================================================================
+# テキスト・データ
+# =====================================================================
+[@テキスト]
+
+メモ帳で開く (&N) | @notepad
+:icon @sys\imageres.dll,247
+
+# [+...] は「継承した拡張子への足し算」。@テキスト に無いスクリプト類も
+# 中身はテキストなので、この項目だけ対象に加えています。
+文字数・行数を数える [+.bat +.cmd +.ps1]
+ | @powershell
+ | -NoProfile -NoExit -Command "'$n'; '行数 : ' + (Get-Content -LiteralPath '$p').Count; '文字数 : ' + (Get-Content -LiteralPath '$p' -Raw).Length"
+
+# + を付けると、選択したすべてのファイルが 1 つのプロセスに渡されます
+# （付けない場合はファイルごとに別プロセスが起動します）。
++ まとめて 1 つのテキストに | @cmd | /c type $p > $d\merged.txt
+
+
+# =====================================================================
+# すべてのファイル
+# =====================================================================
+[file]
+
+# 先頭・末尾のセパレーターは表示するときに自動で取り除かれます。
+---
+
+親フォルダを開いて選択 (&S) | @explorer | /select,$p
+
+# :confirm を書くと、実行する前に確認のダイアログが出ます。
+# 「いいえ」が既定なので、うっかり選んで Enter を続けても実行されません。
+# メッセージは省略できます（そのときは項目名が使われます）。
+読み取り専用・隠し属性を解除
+ | @attrib
+ | -r -s -h $p
+ :confirm $n の属性を変更します。
+
+# ^$ は「プレースホルダーにしない $」。
+# $p（ExtRun が置き換える）と ^$_（PowerShell の変数）が同居できます。
+SHA256 を書き出す
+ | @powershell
+ | -NoProfile -Command "Get-FileHash -LiteralPath '$p' -Algorithm SHA256 ^| ForEach-Object { ^$_.Hash } ^| Set-Content -LiteralPath '$-p.sha256'"
+
+# $?list{} は打ち込むのではなく一覧から選ばせます。
+# = の右を , で区切ったものが選択肢で、先頭が最初から選ばれています。
+# 選べる値しか作れないので、入力の検証そのものが要りません。
+ハッシュ値を選んで書き出す
+ | @powershell
+ | -NoProfile -Command "Get-FileHash -LiteralPath '$p' -Algorithm $?list{アルゴリズム=SHA256,SHA1,MD5} ^| ForEach-Object { ^$_.Hash } ^| Set-Content -LiteralPath '$-p.hash'"
+
+# :when single は「1 つだけ選んだとき」に出す指定です。
+# 名前を 1 つずつ付け直す項目は、複数選んだときに出しても困るだけなので隠します。
+名前を変えて複製する
+ | @cmd
+ | /c copy "$p" "$d\$?name{新しい名前=$a}.$e"
+ :when single
+
+# :when multi は「2 つ以上選んだとき」だけ。
+# $i は何番目か、$c は選んだ総数。$i は総数の桁に合わせてゼロで埋まるので、
+# 10 個選べば 01〜10 になり、できたファイルの並び順が崩れません。
+連番を付けて複製する
+ | @cmd
+ | /c copy "$p" "$d\$a_$i.$e"
+ :when multi
+
+---
+
+
+# =====================================================================
+# フォルダ
+# =====================================================================
+[folder]
+
+# キーはメニューごとに独立しているので、[@画像] の「開く (&O)」とは別に
+# フォルダ側でも好きな文字を選べます（ここでは D）。
+開く (&D)
+> エクスプローラで開く (&E) | @explorer | $p
+> ---
+> PowerShell で開く (&P)
+ | @powershell
+ | -NoExit -Command "Set-Location -LiteralPath '$p'"
+# 引数欄を空（行末の | だけ）にすると引数なしで起動します。
+# :dir は作業フォルダの指定で、プレースホルダーも使えます。
+> コマンドプロンプトで開く (&C) | @cmd |
+ :dir $p
+# :admin を付けると管理者として起動します（選ぶと UAC の確認が出ます）。
+# 昇格はプロセスごとなので、複数選んで個別に起動する項目に付けると
+# 対象の数だけ確認が出ます。+（まとめて渡す）と組み合わせるのが基本です。
+> 管理者としてコマンドプロンプトを開く (&A) | @cmd |
+ :dir $p
+ :admin
+
+---
+
+# $f は親フォルダの名前。出力先のファイル名に使っています。
+ファイル一覧を書き出す
+ | @powershell
+ | -NoProfile -Command "Get-ChildItem -LiteralPath '$p' -Recurse -File ^| ForEach-Object { ^$_.FullName } ^| Set-Content -LiteralPath '$d\$f-filelist.txt'"
+
+# ^@ は「別名として解決しない @」。PowerShell の配列 @( ) をそのまま書けます。
+画像ファイルの数を数える
+ | @powershell
+ | -NoProfile -NoExit -Command "^$e=^@('.png','.jpg','.jpeg','.gif','.bmp'); (Get-ChildItem -LiteralPath '$p' -Recurse -File ^| Where-Object { ^$e -contains ^$_.Extension }).Count"
+
+# セパレーターも拡張子を持てます。
+--- [file folder]
+
+# セクションは [folder] でも、項目側の指定でファイルも対象にできます。
+# セクションの指定は「既定値」であって「絞り込み条件」ではありません。
+サイズを調べる [file folder]
+ | @powershell
+ | -NoProfile -NoExit -Command "'$n'; '{0:N1} MB' -f ((Get-ChildItem -LiteralPath '$p' -Recurse -File -Force -ErrorAction SilentlyContinue ^| Measure-Object Length -Sum).Sum / 1MB)"
+
+
+# =====================================================================
+# ファイルとフォルダの両方
+# =====================================================================
+[file folder]
+
+---
+
+圧縮 (&Z)
+> &ZIP
+# -C で親フォルダに移動して名前だけを渡すと、書庫の中がフラットになります。
+>> 個別に圧縮 (&S) | @tar | -a -c -f $-p.zip -C $d $n
+>> + まとめて 1 つに（フォルダ構成を保持） (&A) | @tar | -a -c -f $d\archive.zip $p
+# $t{...} は実行した日時。書式は yyyy=年 MM=月 dd=日 HH=時 mm=分 ss=秒 で、
+# ddd と書くと曜日（土）、EEE で英語の曜日（Sat）になります。
+# 上書きを避けたいときや、同じ操作を日をまたいで繰り返すときに使えます。
+>> 日付をつけて圧縮 (&D) | @tar | -a -c -f $-p_$t{yyyyMMdd-HHmmss}.zip -C $d $n
+> &TAR.GZ
+>> 個別に圧縮 (&S) | @tar | -a -c -f $-p.tar.gz -C $d $n
+>> + まとめて 1 つに（フォルダ構成を保持） (&A) | @tar | -a -c -f $d\archive.tar.gz $p
+
+---
+
+パスをコピーする (&P)
+ | @powershell
+ | -NoProfile -Command "Set-Clipboard -Value '$p'"
+
+
+# =====================================================================
+# 覚え書き：^ によるエスケープ
+#
+#   ^>  ^+   記号で始まる項目名        例）^> 引用する | @notepad
+#   ^|       引数の中の縦棒
+#   ^:       行頭の : を名前付きフィールドにしない
+#   ^@       別名として解決しない @    例）^@('.png','.jpg')
+#   ^$       プレースホルダーにしない $
+#   ^+  ^-   拡張子欄で足し算・引き算にしない + -
+#   ^&       アクセスキーにしない &    例）Q^&A のかたち | @notepad
+#   ^#  ^[  ^]  ^^   それぞれの文字そのもの
+#
+# ^ は特殊文字の前に置いたときだけエスケープとして働きます。
+# C:\Foo^Bar\app.exe のようなパスはそのまま書けます。
+#
+# =====================================================================
+# 覚え書き：アクセスキー
+#
+#   名前の中の & は、次の 1 文字（半角英数字）をアクセスキーにします。
+#   メニューが出ているあいだにその文字を押すと、その項目が実行されます。
+#
+#     開く (&O)      → 「開く (O)」と表示され、O キーで実行
+#     &PNG に変換    → 「PNG に変換」と表示され、P キーで実行
+#
+#   ・大文字小文字は区別されません
+#   ・キーはメニューごとに独立しています（親と子で同じ文字を使えます）
+#   ・同じメニューの中で重複すると、押しても実行されず選択が移るだけです
+#     （--check が重複を警告します）
+#   ・下線は Alt キーを押すと表示されます（Windows の設定によります）
+# =====================================================================

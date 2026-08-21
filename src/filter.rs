@@ -163,19 +163,27 @@ mod tests {
     use super::*;
     use crate::config::{Config, parse};
     use std::path::PathBuf;
-    /// 実際の設定ファイルを読む（テスト用フィクスチャ兼サンプル）
-    fn sample_config() -> Config {
+    /// 設定ファイルを読んでパースする（エラーがあればその場で落とす）
+    fn config_from_file(relative: &str) -> Config {
+        let path = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), relative);
         let text =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/extrun-config.txt"))
-                .expect("extrun-config.txt を読める");
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path} を読める: {e}"));
 
         let parsed = parse(&text);
         let errors: Vec<String> = parsed
             .errors()
             .map(|d| format!("{}行目: {}", d.line, d.message))
             .collect();
-        assert!(errors.is_empty(), "設定ファイルのエラー: {:?}", errors);
+        assert!(errors.is_empty(), "{path} のエラー: {:?}", errors);
         parsed.config
+    }
+
+    /// 書式を一通り使ったフィクスチャ
+    ///
+    /// かつては同梱のサンプル設定そのものだったが、サンプルは初めて開く人向けに
+    /// 最小限まで削ったので、検証用としてこちらに残してある（配布物には入らない）。
+    fn sample_config() -> Config {
+        config_from_file("tests/fixtures/full-config.txt")
     }
 
     fn target(file_type: &str) -> Target {
@@ -239,6 +247,36 @@ mod tests {
         }
 
         assert!(mismatches.is_empty(), "項目数の不一致: {:#?}", mismatches);
+    }
+
+    /// 同梱するサンプル設定
+    ///
+    /// 初めて開く人が最初に目にするファイルなので、**中身が増えていないこと**を
+    /// 見張る（`config_from_file` が書式エラーも検出する）。書き足したくなったら
+    /// フィクスチャの方（`tests/fixtures/full-config.txt`）かレシピ集へ。
+    #[test]
+    fn 同梱のサンプル設定は最小限のまま() {
+        let config = config_from_file("extrun-config.txt");
+
+        let expected = [
+            // 画像 2 つ + [file] の「親フォルダを開いて選択」
+            (".png", 3),
+            (".jpg", 3),
+            // テキスト 1 つ + [file]
+            (".txt", 2),
+            // どのセクションにも該当しない拡張子は [file] だけ
+            (".pdf", 1),
+            ("file", 1),
+            ("folder", 2),
+        ];
+
+        for (file_type, count) in expected {
+            assert_eq!(
+                count_items(&menu_for(&config, file_type)),
+                count,
+                "{file_type} の項目数"
+            );
+        }
     }
 
     /// 選んだ数による出し分け（`:when`）
