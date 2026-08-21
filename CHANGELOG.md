@@ -13,7 +13,7 @@
 書き方は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、
 バージョン番号は [セマンティック バージョニング](https://semver.org/lang/ja/) に従います。
 
-## [Unreleased]
+## [1.9.1] - 2026-08-22
 
 ### 修正
 
@@ -277,6 +277,7 @@
 - `extrun-recipes.md` — ffmpeg / ImageMagick / IrfanView / 7-Zip / VS Code / VLC / Pandoc などの設定例集と、AutoHotkey から呼び出す例
 - `packaging/readme.txt` — 配布 zip に同梱する説明書
 
+[1.9.1]: https://github.com/pirukabocha/extrun/releases/tag/v1.9.1
 [1.9.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.9.0
 [1.8.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.8.0
 [1.7.0]: https://github.com/pirukabocha/extrun/releases/tag/v1.7.0
