@@ -10,7 +10,7 @@
     フォーム
       → 作成した設定（④ の欄）        ← ここが中間表現を兼ねる
       → config::parse                  → 書式のエラーをその場で出す
-      → 末尾の項目を取り出す
+      → 作った行にある項目を取り出す
       → filter::filter_menu_items      → この対象で表示されるか
       → preview::write_invocations     → ⑤ の欄
                                           （中で invoke::resolve_invocations）
@@ -18,6 +18,11 @@
 ④ を中間表現にしてあるので、ツールの中に「フォームの状態」と「設定の文字列」
 という 2 つの真実が並ばない。**貼る文字列がそのまま検証にもプレビューにも
 使われる。**
+
+**評価するのはツールが作った行だけ。** 今ある設定ファイルは別名を解決する
+ために前後へ繋げるが、そこにある項目を代わりに評価することはしない。
+まだ何も入力していない状態で他人の項目の説明が出ると、⑤ は自分が作った
+ものの見た目をしたまま嘘をつく（`NOT_READY` へ折り返す）。
 
 整形は `--preview` と同じ関数（`preview::write_invocations`）を呼ぶ。
 自前で書くと、プレビューが `--preview` と違うことを言い出す。
@@ -33,6 +38,15 @@ use std::path::{Path, PathBuf};
 /// 仕様書がプレースホルダーの説明に使っている例と同じにしてある
 /// （読み比べたときに `$d` が何を指すのかがすぐ分かる）。
 pub const DEFAULT_TARGET: &str = r"C:\folder\file.txt";
+
+/// まだ何も評価できないときに出す案内
+///
+/// **「項目がありません」だけで終えない。** ⑤ は起動前に確かめる場所なので、
+/// 空欄のままだと「壊れているのか、まだ何もしていないのか」が見分けられない。
+/// 欄の呼び名は画面（`layout.rs`）と揃える。
+const NOT_READY: &str = "まだ項目がありません。\r\n\r\n\
+    ① の「メニューに表示する名前」と「起動するアプリ」を入れると、\r\n\
+    その設定で起動されるものがここに出ます。\r\n";
 
 /// 何個選んだことにするか
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +119,19 @@ pub fn describe(
     path: &str,
     count: Count,
 ) -> String {
+    // **項目として成立していないあいだは、何も評価しない。**
+    //
+    // 起動時のように名前も実行ファイルも空だと、`to_config` が書き出すのは
+    // セクションの見出しだけで項目が 1 つも無い。そのまま先へ進めると、
+    // 今ある設定ファイルの中身を評価してしまう。
+    //
+    // 実行ファイルだけ入れた（＝名前が空の）状態でここを通すのも避ける。
+    // 項目行が ` | パス` になり、パーサからは「継続行（|）の前に項目が
+    // ありません」に見えるので、打ち始めた人には読み解けない。
+    if !writes_item(config_text) {
+        return NOT_READY.to_string();
+    }
+
     let (joined, offset) = splice(prefix, after_line, config_text);
     let parsed = config::parse(&joined);
 
@@ -124,14 +151,15 @@ pub fn describe(
     }
 
     // **差し込んだ行から探す。** 途中に入れたときは、ツールが作った項目が
-    // 末尾にいるとは限らない
+    // 末尾にいるとは限らない。**見つからなければ何も評価しない** — 代わりに
+    // 今ある設定ファイルの項目を出すと、まだ触ってもいない他人の項目の
+    // 説明が「この設定で起動されるもの」として並ぶ
     let made = generated_lines(config_text, offset);
     let Some(item) = made
         .clone()
         .and_then(|range| item_at(&parsed.config.apps, range))
-        .or_else(|| last_item(&parsed.config.apps).cloned())
     else {
-        return "まだ項目がありません。\r\n".to_string();
+        return NOT_READY.to_string();
     };
     let item = &item;
 
@@ -214,17 +242,34 @@ fn splice(prefix: &str, after_line: Option<u32>, config_text: &str) -> (String, 
     (out, at as u32)
 }
 
-/// いちばん最後の（＝ツールが作った）項目を取り出す
+/// ツールが作った数行に、名前の付いた項目の行があるか
 ///
-/// サブメニューを作った場合、親ではなく**中身**が見たいものなので、
-/// 末尾までたどる。
-fn last_item(items: &[MenuItem]) -> Option<&MenuItem> {
-    let last = items.iter().rev().find(|item| !item.is_separator())?;
-    if last.has_submenu() {
-        last_item(&last.submenu)
-    } else {
-        Some(last)
-    }
+/// **`to_config` が書き出したものだけを見る**小さな判定で、設定ファイル一般を
+/// 読む関数ではない（形を決めているのは `form.rs` で、項目の行は名前付き
+/// フィールドより前・見出しより後ろの最後の 1 行と決まっている）。
+///
+/// パーサに掛ける前に見るのは、名前が空のときの診断が「継続行の前に項目が
+/// ありません」という**書いた覚えのない行についての指摘**になるため。
+fn writes_item(config_text: &str) -> bool {
+    config_text
+        .lines()
+        .rfind(|line| {
+            let head = line.trim_start();
+            // 空行・セクションの見出し・名前付きフィールドは項目の行ではない
+            !head.is_empty() && !head.starts_with('[') && !head.starts_with(':')
+        })
+        .is_some_and(|line| !item_name(line).is_empty())
+}
+
+/// 項目の行から、名前として書かれた部分を取り出す
+///
+/// 行頭の `>` `+` `-` は階層マーカー・まとめて渡す印・区切り線と決まる
+/// （名前の側にあるものは `text::escape_name` が `^>` のように守るため）。
+fn item_name(line: &str) -> &str {
+    let name = line.split('|').next().unwrap_or("");
+    let name = name.trim_start_matches(['>', '+', ' ', '\t']).trim();
+    // 区切り線（`---`）は名前ではない
+    if name.starts_with('-') { "" } else { name }
 }
 
 /// ツールが作った行が、繋げた本文の何行目から何行目までにあるか
@@ -258,6 +303,7 @@ fn item_at(items: &[MenuItem], range: std::ops::Range<u32>) -> Option<MenuItem> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::form::Form;
 
     const 見本: &str = "[.png]\r\n\r\n+ ZIP にまとめる | C:\\tar.exe | -c -f $d\\a.zip $p\r\n";
 
@@ -335,6 +381,40 @@ mod tests {
         );
         assert!(本文.contains("問題があります"), "{}", 本文);
         assert!(本文.contains("行目"), "{}", 本文);
+    }
+
+    /// **起動直後の状態。** 何も入力していないのに、今ある設定ファイルの
+    /// 最後の項目を評価して出していた（それが「この設定で起動されるもの」の
+    /// 顔をして並ぶので、自分が作ったものだと読めてしまう）
+    #[test]
+    fn 未入力なら今ある設定ファイルの項目を評価しない() {
+        let 元 = "[.txt]\r\n古い項目 | C:\\Windows\\notepad.exe | $p\r\n";
+        let 空 = Form::default();
+        let 本文 = super::describe(
+            元,
+            空.paste_line(),
+            &空.to_config(),
+            r"C:\a.txt",
+            Count::One,
+        );
+        assert!(!本文.contains("notepad"), "{}", 本文);
+        assert!(本文.contains("まだ項目がありません"), "{}", 本文);
+    }
+
+    /// 名前より先に実行ファイルを入れた状態。項目行が ` | パス` になるので、
+    /// パーサからは「継続行の前に項目がありません」に見える
+    #[test]
+    fn 名前が空のあいだは書き方のエラーではなく案内を出す() {
+        let 本文 = describe("[file]\r\n\r\n | C:\\a.exe\r\n", r"C:\a.txt", Count::One);
+        assert!(!本文.contains("継続行"), "{}", 本文);
+        assert!(本文.contains("メニューに表示する名前"), "{}", 本文);
+    }
+
+    /// 区切り線だけでは項目にならない（`---` は名前ではない）
+    #[test]
+    fn 区切り線だけなら案内を出す() {
+        let 本文 = describe("[file]\r\n\r\n--- [.png]\r\n\r\n", r"C:\a.png", Count::One);
+        assert!(本文.contains("まだ項目がありません"), "{}", 本文);
     }
 
     #[test]
