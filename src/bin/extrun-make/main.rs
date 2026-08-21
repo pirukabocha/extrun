@@ -23,7 +23,7 @@ mod presets;
 use std::ptr::null_mut;
 
 use extrun::dialog::{show_modal, to_wide};
-use form::{ExtStyle, Form, Placement, WhenKind};
+use form::{ExtStyle, Form, Placement, Spot, WhenKind};
 use layout::*;
 use live::Count;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
@@ -252,14 +252,7 @@ unsafe fn init(hwnd: HWND, app: &mut App) {
             enable(hwnd, ID_ALIAS, false);
             enable(hwnd, ID_ALIAS_INSERT, false);
         }
-        combo_fill(
-            hwnd,
-            ID_PLACE,
-            &[
-                "メニューの一番上の階層".to_string(),
-                "新しいサブメニューを作る".to_string(),
-            ],
-        );
+        combo_fill(hwnd, ID_PLACE, &place_choices(&app.existing));
         combo_fill(
             hwnd,
             ID_WHEN,
@@ -408,10 +401,7 @@ unsafe fn read_form(hwnd: HWND, app: &mut App) {
             ExtStyle::Section
         };
 
-        form.placement = match combo_selection(hwnd, ID_PLACE) {
-            1 => Placement::NewSubmenu,
-            _ => Placement::Root,
-        };
+        form.placement = placement_at(&app.existing, combo_selection(hwnd, ID_PLACE));
         form.submenu_name = get_text(hwnd, ID_SUB_NAME);
         form.submenu_key = get_text(hwnd, ID_SUB_KEY);
         form.separator = checked(hwnd, ID_SEPARATOR);
@@ -463,9 +453,15 @@ unsafe fn sync_enabled(hwnd: HWND, form: &Form) {
         enable(hwnd, ID_INSERT_LIST, !form.no_args);
         enable(hwnd, ID_INSERT, !form.no_args);
 
-        let submenu = form.placement == Placement::NewSubmenu;
-        enable(hwnd, ID_SUB_NAME, submenu);
-        enable(hwnd, ID_SUB_KEY, submenu);
+        let new_submenu = form.placement == Placement::NewSubmenu;
+        enable(hwnd, ID_SUB_NAME, new_submenu);
+        enable(hwnd, ID_SUB_KEY, new_submenu);
+
+        // 今あるサブメニューに入れるときは、必ず項目の行に書く。
+        // 見出しを親と子のあいだに挟むと、そこから下の対象がまとめて変わる
+        let choosable = !matches!(form.placement, Placement::Existing(_));
+        enable(hwnd, ID_EXT_SECTION, choosable);
+        enable(hwnd, ID_EXT_PERITEM, choosable);
 
         enable(hwnd, ID_CONFIRM_MESSAGE, form.confirm);
         enable(hwnd, ID_DELAY_MS, form.delay);
@@ -481,7 +477,7 @@ unsafe fn rebuild(hwnd: HWND, app: &App) {
     unsafe {
         let text = app.form.to_config();
         set_text(hwnd, ID_OUTPUT, &text);
-        set_text(hwnd, ID_PASTE_HINT, app.form.paste_hint());
+        set_text(hwnd, ID_PASTE_HINT, &app.form.paste_hint());
 
         let used = presets::used_placeholders(&app.form.args);
         set_text(hwnd, ID_PLACEHOLDER_HINT, &used.join("　"));
@@ -489,7 +485,13 @@ unsafe fn rebuild(hwnd: HWND, app: &App) {
         set_text(
             hwnd,
             ID_PREVIEW,
-            &live::describe(&app.existing.prefix, &text, &app.try_path, app.count),
+            &live::describe(
+                &app.existing.prefix,
+                app.form.paste_line(),
+                &text,
+                &app.try_path,
+                app.count,
+            ),
         );
     }
 }
@@ -956,6 +958,37 @@ fn current_ext_kind(app: &App) -> i32 {
             .position(|item| *item == kind)
             .unwrap_or(0) as i32,
         None => 0,
+    }
+}
+
+/// 「置き場所」に並べるもの
+///
+/// **今あるサブメニューは、設定ファイルが読めたときだけ増える。**
+/// 読めなかった人には最初の 2 つだけが出る。
+fn place_choices(existing: &existing::Existing) -> Vec<String> {
+    let mut choices = vec![
+        "メニューの一番上の階層".to_string(),
+        "新しいサブメニューを作る".to_string(),
+    ];
+    for submenu in &existing.submenus {
+        choices.push(format!("「{}」の中", submenu.label));
+    }
+    choices
+}
+
+/// コンボの位置から置き場所を決める
+fn placement_at(existing: &existing::Existing, index: i32) -> Placement {
+    match index {
+        1 => Placement::NewSubmenu,
+        n if n >= 2 => match existing.submenus.get(n as usize - 2) {
+            Some(submenu) => Placement::Existing(Spot {
+                depth: submenu.depth,
+                line: submenu.last_line,
+                label: submenu.label.clone(),
+            }),
+            None => Placement::Root,
+        },
+        _ => Placement::Root,
     }
 }
 

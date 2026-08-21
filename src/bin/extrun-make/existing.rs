@@ -19,7 +19,7 @@
 
 use std::path::PathBuf;
 
-use extrun::config;
+use extrun::config::{self, MenuItem};
 
 /// 別名 1 つぶん
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,12 +29,25 @@ pub struct Alias {
     pub value: String,
 }
 
+/// 今あるサブメニュー 1 つぶん
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Submenu {
+    /// 「圧縮」や「圧縮 > ZIP」
+    pub label: String,
+    /// 何階層目か（1 なら `>`、2 なら `>>`）
+    pub depth: usize,
+    /// **この行の下に貼る**（いちばん最後の子の行）
+    pub last_line: u32,
+}
+
 /// 読み込んだ設定ファイル
 pub struct Existing {
     /// 読めたファイルの場所（読めなければ `None`）
     pub path: Option<PathBuf>,
     /// 書かれた順の別名
     pub aliases: Vec<Alias>,
+    /// 今あるサブメニュー（2 階層目まで）
+    pub submenus: Vec<Submenu>,
     /// プレビューで前に繋げる本文
     ///
     /// **書式が壊れているファイルは繋げない。** 繋げると、このツールで
@@ -62,6 +75,12 @@ impl Existing {
 
         let aliases = collect_aliases(&text);
         let parsed = config::parse(&text);
+        let submenus = if parsed.has_error() {
+            // 壊れているファイルから読んだ階層は当てにならない
+            Vec::new()
+        } else {
+            collect_submenus(&parsed.config.apps)
+        };
         let problem = if parsed.has_error() {
             Some(format!(
                 "設定ファイルに {} 件の問題があります（extrun.exe --check で確認できます）",
@@ -80,6 +99,7 @@ impl Existing {
             },
             path: Some(path),
             aliases,
+            submenus,
             problem,
         }
     }
@@ -88,6 +108,7 @@ impl Existing {
         Existing {
             path: None,
             aliases: Vec::new(),
+            submenus: Vec::new(),
             prefix: String::new(),
             problem: None,
         }
@@ -116,6 +137,50 @@ impl Existing {
             Some(_) => format!("設定ファイルから別名を {} 件読みました", self.aliases.len()),
         }
     }
+}
+
+/// 今あるサブメニューを、書かれた順に集める
+///
+/// **2 階層目まで。** 3 階層目に足すのは `>` を 1 つ書き足せば済むし、
+/// そこまで並べると一覧が読めなくなる（`extrun-make` の役目は最初の 1 歩を
+/// 楽にすることで、メニュー全体の編集ではない）。
+fn collect_submenus(items: &[MenuItem]) -> Vec<Submenu> {
+    let mut found = Vec::new();
+    walk_submenus(items, &mut Vec::new(), &mut found);
+    found
+}
+
+fn walk_submenus(items: &[MenuItem], path: &mut Vec<String>, found: &mut Vec<Submenu>) {
+    for item in items {
+        if !item.has_submenu() {
+            continue;
+        }
+        path.push(item.name.clone());
+
+        found.push(Submenu {
+            label: path.join(" > "),
+            depth: path.len(),
+            last_line: last_line(item),
+        });
+
+        if path.len() < 2 {
+            walk_submenus(&item.submenu, path, found);
+        }
+        path.pop();
+    }
+}
+
+/// その項目とその中身のうち、いちばん下の行
+///
+/// **子の下に貼る**ので、親の行ではなく末端まで見る。ここを親の行にすると、
+/// 既にある子より前に割り込んでしまう。
+fn last_line(item: &MenuItem) -> u32 {
+    item.submenu
+        .iter()
+        .map(last_line)
+        .chain(std::iter::once(item.line))
+        .max()
+        .unwrap_or(item.line)
 }
 
 /// `extrun.exe` と同じフォルダの `extrun-config.txt`
@@ -228,6 +293,7 @@ mod tests {
             path: None,
             prefix: String::new(),
             problem: None,
+            submenus: Vec::new(),
             aliases: vec![
                 Alias {
                     name: "画像".into(),
@@ -278,10 +344,67 @@ mod tests {
         assert_eq!(head(".png", 12), ".png");
     }
 
+    fn 階層(本文: &str) -> Vec<Submenu> {
+        let parsed = config::parse(本文);
+        assert!(!parsed.has_error());
+        collect_submenus(&parsed.config.apps)
+    }
+
+    #[test]
+    fn 今あるサブメニューを集める() {
+        let 本文 = "[file]\r\n\
+            圧縮\r\n\
+            > ZIP\r\n\
+            >> 個別に | C:\\a.exe\r\n\
+            >> まとめて | C:\\a.exe\r\n\
+            > TAR\r\n\
+            >> 個別に | C:\\a.exe\r\n\
+            開く | C:\\b.exe\r\n";
+        let 階層 = 階層(本文);
+
+        assert_eq!(
+            階層.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(),
+            ["圧縮", "圧縮 > ZIP", "圧縮 > TAR"]
+        );
+        assert_eq!(階層[0].depth, 1);
+        assert_eq!(階層[1].depth, 2);
+    }
+
+    /// 親の行ではなく末端の行を返す（既にある子より前に割り込まないため）
+    #[test]
+    fn 貼る先はいちばん最後の子の下() {
+        let 本文 = "[file]\r\n\
+            圧縮\r\n\
+            > ZIP\r\n\
+            >> 個別に | C:\\a.exe\r\n\
+            >> まとめて | C:\\a.exe\r\n";
+        let 階層 = 階層(本文);
+
+        // 「圧縮」の末端も「圧縮 > ZIP」の末端も、いちばん下の子の行
+        assert_eq!(階層[0].last_line, 5);
+        assert_eq!(階層[1].last_line, 5);
+    }
+
+    /// 3 階層目は並べない（`>` を 1 つ書き足せば済む）
+    #[test]
+    fn 三階層目は集めない() {
+        let 本文 = "[file]\r\n\
+            A\r\n\
+            > B\r\n\
+            >> C\r\n\
+            >>> D | C:\\a.exe\r\n";
+        let 階層 = 階層(本文);
+        assert_eq!(
+            階層.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(),
+            ["A", "A > B"]
+        );
+    }
+
     #[test]
     fn 読めなければ何も無い状態になる() {
         let empty = Existing::empty();
         assert!(empty.aliases.is_empty());
+        assert!(empty.submenus.is_empty());
         assert!(empty.prefix.is_empty());
         assert!(empty.status().contains("見つかりません"));
     }

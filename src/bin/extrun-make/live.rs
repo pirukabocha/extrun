@@ -98,13 +98,14 @@ fn sibling(base: &Path, index: usize) -> PathBuf {
 /// 繋げないと「未定義の別名」で止まり、別名を使った設定のプレビューが
 /// 何も出せなくなる。行番号がずれるので、**診断はこのツールが作った行に
 /// 限って出す**。
-pub fn describe(prefix: &str, config_text: &str, path: &str, count: Count) -> String {
-    let offset = prefix.lines().count() as u32;
-    let joined = if prefix.trim().is_empty() {
-        config_text.to_string()
-    } else {
-        format!("{}\r\n{}", prefix.trim_end(), config_text)
-    };
+pub fn describe(
+    prefix: &str,
+    after_line: Option<u32>,
+    config_text: &str,
+    path: &str,
+    count: Count,
+) -> String {
+    let (joined, offset) = splice(prefix, after_line, config_text);
     let parsed = config::parse(&joined);
 
     if parsed.has_error() {
@@ -122,9 +123,17 @@ pub fn describe(prefix: &str, config_text: &str, path: &str, count: Count) -> St
         return "試す対象のパスを入れてください。\r\n".to_string();
     }
 
-    let Some(item) = last_item(&parsed.config.apps) else {
+    // **差し込んだ行から探す。** 途中に入れたときは、ツールが作った項目が
+    // 末尾にいるとは限らない
+    let made = generated_lines(config_text, offset);
+    let Some(item) = made
+        .clone()
+        .and_then(|range| item_at(&parsed.config.apps, range))
+        .or_else(|| last_item(&parsed.config.apps).cloned())
+    else {
         return "まだ項目がありません。\r\n".to_string();
     };
+    let item = &item;
 
     // 対象に合うかどうかは、メニューを組み立てるときと同じ関数で見る。
     // ここで自前に判定すると「プレビューには出るのにメニューに出ない」が起きる
@@ -154,6 +163,40 @@ pub fn describe(prefix: &str, config_text: &str, path: &str, count: Count) -> St
     out
 }
 
+/// 今ある設定ファイルの、**実際に貼る場所**へ差し込む
+///
+/// 末尾に繋げるだけでは足りない。`>` の付いた行を末尾に足すと、選んだ親では
+/// なく**ファイル最後のルート項目**にぶら下がるので、プレビューが嘘になる。
+/// 拡張子の差分（`+` / `-`）も、どのセクションの下にいるかで結果が変わる。
+///
+/// 戻り値の 2 つ目は、差し込んだ位置より前にある行数。**エラーの行番号から
+/// これを引く**と、「作成した設定」の中での行番号になる。
+fn splice(prefix: &str, after_line: Option<u32>, config_text: &str) -> (String, u32) {
+    if prefix.trim().is_empty() {
+        return (config_text.to_string(), 0);
+    }
+
+    let lines: Vec<&str> = prefix.lines().collect();
+    let at = match after_line {
+        // 1 始まりの行番号。その行の**下**に入れる
+        Some(line) => (line as usize).min(lines.len()),
+        None => lines.len(),
+    };
+
+    let mut out = String::new();
+    for line in &lines[..at] {
+        out.push_str(line);
+        out.push_str("\r\n");
+    }
+    out.push_str(config_text);
+    for line in &lines[at..] {
+        out.push_str(line);
+        out.push_str("\r\n");
+    }
+
+    (out, at as u32)
+}
+
 /// いちばん最後の（＝ツールが作った）項目を取り出す
 ///
 /// サブメニューを作った場合、親ではなく**中身**が見たいものなので、
@@ -167,6 +210,34 @@ fn last_item(items: &[MenuItem]) -> Option<&MenuItem> {
     }
 }
 
+/// ツールが作った行が、繋げた本文の何行目から何行目までにあるか
+fn generated_lines(config_text: &str, offset: u32) -> Option<std::ops::Range<u32>> {
+    let count = config_text.lines().count() as u32;
+    if count == 0 {
+        return None;
+    }
+    Some(offset + 1..offset + 1 + count)
+}
+
+/// その行の範囲にある項目のうち、いちばん下のもの
+///
+/// サブメニューの中まで探す（親ではなく中身が見たいものなので）。
+fn item_at(items: &[MenuItem], range: std::ops::Range<u32>) -> Option<MenuItem> {
+    let mut found: Option<MenuItem> = None;
+
+    for item in items {
+        if let Some(deeper) = item_at(&item.submenu, range.clone()) {
+            found = Some(deeper);
+            continue;
+        }
+        if !item.is_separator() && !item.has_submenu() && range.contains(&item.line) {
+            found = Some(item.clone());
+        }
+    }
+
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,7 +246,12 @@ mod tests {
 
     /// 設定ファイルを読んでいないときの呼び方
     fn describe(config_text: &str, path: &str, count: Count) -> String {
-        super::describe("", config_text, path, count)
+        super::describe("", None, config_text, path, count)
+    }
+
+    /// 設定ファイルを前に繋げるときの呼び方
+    fn describe_with(prefix: &str, config_text: &str) -> String {
+        super::describe(prefix, None, config_text, r"C:\photo\a.png", Count::One)
     }
 
     #[test]
@@ -258,12 +334,7 @@ mod tests {
     #[test]
     fn 設定ファイルの別名を解決する() {
         let 設定 = "[.png]\r\n\r\nX | @sys\\tar.exe | $p\r\n";
-        let 本文 = super::describe(
-            "@sys = C:\\Windows\\System32\r\n",
-            設定,
-            r"C:\photo\a.png",
-            Count::One,
-        );
+        let 本文 = describe_with("@sys = C:\\Windows\\System32\r\n", 設定);
         assert!(本文.contains(r"C:\Windows\System32\tar.exe"), "{}", 本文);
     }
 
@@ -271,9 +342,10 @@ mod tests {
     #[test]
     fn エラーの行番号は作成した設定の中で数える() {
         let 設定 = "[.png]\r\n\r\nX | C:\\a.exe | $t{zzz}\r\n";
-        let 単体 = super::describe("", 設定, r"C:\a.png", Count::One);
+        let 単体 = super::describe("", None, 設定, r"C:\a.png", Count::One);
         let 連結 = super::describe(
             "@a = b\r\n@c = d\r\n@e = f\r\n",
+            None,
             設定,
             r"C:\a.png",
             Count::One,
@@ -285,6 +357,46 @@ mod tests {
                 .to_string()
         };
         assert_eq!(行(&単体), 行(&連結), "行番号がずれている");
+    }
+
+    /// 末尾に繋げると、`>` の行がファイル最後のルート項目にぶら下がる
+    #[test]
+    fn 今あるサブメニューの中に差し込む() {
+        let 元 = "[file]\r\n\
+            圧縮\r\n\
+            > ZIP | C:\\zip.exe | $p\r\n\
+            別のもの\r\n\
+            > X | C:\\x.exe | $p\r\n";
+        // 3 行目（`> ZIP` の行）の下に差し込む
+        let 本文 = super::describe(
+            元,
+            Some(3),
+            "> 新しい項目 | C:\\new.exe | $p\r\n",
+            r"C:\a.txt",
+            Count::One,
+        );
+        assert!(本文.contains(r"C:\new.exe"), "{}", 本文);
+    }
+
+    /// 差し込んだ位置より前の行数を引かないと、行番号が読めない
+    #[test]
+    fn 途中に差し込んでも行番号は作成した設定の中で数える() {
+        let 設定 = "[.png]\r\n\r\nX | C:\\a.exe | $t{zzz}\r\n";
+        let 単体 = super::describe("", None, 設定, r"C:\a.png", Count::One);
+        let 途中 = super::describe(
+            "[file]\r\nA | C:\\a.exe\r\nB | C:\\b.exe\r\n",
+            Some(2),
+            設定,
+            r"C:\a.png",
+            Count::One,
+        );
+        let 行 = |text: &str| {
+            text.lines()
+                .find(|line| line.contains("行目"))
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(行(&単体), 行(&途中), "行番号がずれている");
     }
 
     /// サブメニューを作ったときは、親ではなく中身を見せる

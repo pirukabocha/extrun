@@ -23,13 +23,26 @@ pub enum ExtStyle {
     PerItem,
 }
 
+/// 今あるサブメニューに入れるときの貼り先
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spot {
+    /// 何階層目か（1 なら `>`、2 なら `>>`）
+    pub depth: usize,
+    /// この行の下に貼る
+    pub line: u32,
+    /// 「圧縮 > ZIP」
+    pub label: String,
+}
+
 /// メニューのどこに表示するか
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Placement {
     /// メニューの一番上の階層
     Root,
     /// 新しいサブメニューを作る（親の行も一緒に書き出す）
     NewSubmenu,
+    /// 今あるサブメニューの中（親の行は書かない）
+    Existing(Spot),
 }
 
 /// `:when` の値
@@ -133,23 +146,24 @@ impl Form {
         //
         // 同じ見出しをファイル内に何度書いてもよいので、末尾に貼るぶんには
         // 毎回付けて構わない（仕様で決まっている）
-        if self.ext_style == ExtStyle::Section {
+        if self.effective_ext_style() == ExtStyle::Section {
             out.push('[');
             out.push_str(self.extensions.trim());
             out.push_str("]\r\n\r\n");
         }
 
         // --- サブメニューの親 ---
+        //
+        // **今あるサブメニューに入れるときは書かない。** 書くと同じ名前の親が
+        // 2 つ並ぶ
         if self.placement == Placement::NewSubmenu {
             out.push_str(&escape_name(self.submenu_name.trim()));
             out.push_str(&accesskey(&self.submenu_key));
             out.push_str("\r\n");
         }
 
-        let marker = match self.placement {
-            Placement::Root => "",
-            Placement::NewSubmenu => "> ",
-        };
+        let marker = self.marker();
+        let marker = marker.as_str();
 
         // --- 区切り線 ---
         //
@@ -159,7 +173,7 @@ impl Form {
         if self.separator {
             out.push_str(marker);
             out.push_str("---");
-            if self.ext_style == ExtStyle::PerItem {
+            if self.effective_ext_style() == ExtStyle::PerItem {
                 out.push_str(&self.extension_suffix());
             }
             out.push_str("\r\n");
@@ -172,7 +186,7 @@ impl Form {
         }
         out.push_str(&escape_name(self.name.trim()));
         out.push_str(&accesskey(&self.key));
-        if self.ext_style == ExtStyle::PerItem {
+        if self.effective_ext_style() == ExtStyle::PerItem {
             out.push_str(&self.extension_suffix());
         }
 
@@ -201,6 +215,38 @@ impl Form {
         }
 
         out
+    }
+
+    /// 行頭に付ける階層マーカー
+    fn marker(&self) -> String {
+        match &self.placement {
+            Placement::Root => String::new(),
+            Placement::NewSubmenu => "> ".to_string(),
+            Placement::Existing(spot) => format!("{} ", ">".repeat(spot.depth)),
+        }
+    }
+
+    /// 実際に使う拡張子の書き方
+    ///
+    /// **今あるサブメニューに入れるときは、必ず項目の行に書く。**
+    /// セクションの見出しを親と子のあいだに挟むと、そこから下の項目の対象が
+    /// まとめて変わってしまう（見出しは「以降の項目」に効く）。
+    fn effective_ext_style(&self) -> ExtStyle {
+        match self.placement {
+            Placement::Existing(_) => ExtStyle::PerItem,
+            _ => self.ext_style,
+        }
+    }
+
+    /// 何行目の下に貼るか（`None` なら末尾）
+    ///
+    /// **プレビューはここに差し込んで解析する。** 末尾に繋げると、`>` の付いた
+    /// 行がファイル最後のルート項目にぶら下がり、プレビューが嘘になる。
+    pub fn paste_line(&self) -> Option<u32> {
+        match &self.placement {
+            Placement::Existing(spot) => Some(spot.line),
+            _ => None,
+        }
     }
 
     /// `[.png .jpg]` の形（項目の行に書くとき）
@@ -248,23 +294,27 @@ impl Form {
 
     /// 貼り付け先の案内（「作成した設定」の見出しに添える）
     ///
-    /// **書き方で文言を変えない。** かつては「見出しにする」なら末尾、
-    /// 「項目の行に書く」なら「どのセクションの下でも同じように動きます」と
-    /// 出し分けていたが、どちらも言い過ぎだった。
+    /// **末尾に貼るときは、書き方で文言を変えない。** かつては「見出しにする」
+    /// なら末尾、「項目の行に書く」なら「どのセクションの下でも同じように
+    /// 動きます」と出し分けていたが、どちらも言い過ぎだった。
     ///
     /// - 見出しを**ファイルの途中に貼ると、その下にある既存の項目の対象が
     ///   まとめて変わる**（見出しは「以降の項目」に効くため）。「どこでもよい」
     ///   と案内すると、黙って壊れる貼り方をさせてしまう
-    /// - 項目の行に書いた場合も、サブメニューの途中に貼れば階層が切れる。
-    ///   拡張子の指定が独立していることと、貼る位置が自由なことは別の話
+    /// - 項目の行に書いた場合も、サブメニューの途中に貼れば階層が切れる
     ///
-    /// **末尾なら必ず正しい**ので、それだけを 1 つ言う。ほかの場所を禁じる
-    /// 言い方にしないのは、整理して貼りたい人の邪魔をしないため。
-    ///
-    /// Phase 5 で「既にあるサブメニューの中」を選べるようにしたら、そのときは
-    /// 貼り先の行番号を案内するのでここが再び変わる。
-    pub fn paste_hint(&self) -> &'static str {
-        "extrun-config.txt の末尾に貼り付ければ、そのまま動きます"
+    /// **今あるサブメニューに入れるときだけは末尾では成立しない。**
+    /// 子の行は親の直後になければならないので、行番号で場所を伝える。
+    /// ファイルの途中に書き込む（＝この道具が設定ファイルを書き換える）のは
+    /// 避けたいので、**書かずに場所を教える**。
+    pub fn paste_hint(&self) -> String {
+        match &self.placement {
+            Placement::Existing(spot) => format!(
+                "extrun-config.txt の {} 行目、「{}」の最後の項目の下に貼り付けてください",
+                spot.line, spot.label
+            ),
+            _ => "extrun-config.txt の末尾に貼り付ければ、そのまま動きます".to_string(),
+        }
     }
 }
 
@@ -596,5 +646,80 @@ mod tests {
         assert!(案内.contains("末尾"), "{}", 案内);
         form.ext_style = ExtStyle::PerItem;
         assert_eq!(form.paste_hint(), 案内);
+    }
+
+    fn 貼り先() -> Spot {
+        Spot {
+            depth: 2,
+            line: 34,
+            label: "圧縮 > ZIP".to_string(),
+        }
+    }
+
+    /// 今あるサブメニューに入れるときは、親の行を書かずにマーカーだけ付ける
+    #[test]
+    fn 今あるサブメニューには親を書かない() {
+        let form = Form {
+            placement: Placement::Existing(貼り先()),
+            ..見本()
+        };
+        let text = form.to_config().replace("\r\n", "\n");
+
+        assert!(text.starts_with(">> + ZIP にまとめる"), "{}", text);
+        // 項目の行の `[...]` は残る。書いてはいけないのは**見出しの行**
+        assert!(
+            !text.lines().any(|line| line.starts_with('[')),
+            "見出しの行を書いてはいけない: {}",
+            text
+        );
+    }
+
+    /// 見出しを親と子のあいだに挟むと、そこから下の対象がまとめて変わる
+    #[test]
+    fn 今あるサブメニューでは項目の行に書く() {
+        let form = Form {
+            placement: Placement::Existing(貼り先()),
+            ext_style: ExtStyle::Section,
+            ..見本()
+        };
+        assert_eq!(form.effective_ext_style(), ExtStyle::PerItem);
+        assert!(
+            form.to_config().contains("(&Z) [.png .jpg .jpeg] |"),
+            "{}",
+            form.to_config()
+        );
+    }
+
+    #[test]
+    fn 一階層目ならマーカーは一つ() {
+        let form = Form {
+            placement: Placement::Existing(Spot {
+                depth: 1,
+                ..貼り先()
+            }),
+            ..見本()
+        };
+        assert!(
+            form.to_config().starts_with("> + ZIP"),
+            "{}",
+            form.to_config()
+        );
+    }
+
+    #[test]
+    fn 今あるサブメニューは行番号で案内する() {
+        let form = Form {
+            placement: Placement::Existing(貼り先()),
+            ..見本()
+        };
+        let 案内 = form.paste_hint();
+        assert!(案内.contains("34 行目"), "{}", 案内);
+        assert!(案内.contains("圧縮 > ZIP"), "{}", 案内);
+        assert_eq!(form.paste_line(), Some(34));
+    }
+
+    #[test]
+    fn 末尾に貼るときは行番号を持たない() {
+        assert_eq!(見本().paste_line(), None);
     }
 }
