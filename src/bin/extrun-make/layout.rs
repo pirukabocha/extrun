@@ -70,8 +70,8 @@ pub const ID_ALL_MODE: u16 = 109;
 
 pub const ID_EXT_KIND: u16 = 110;
 pub const ID_EXT: u16 = 111;
-pub const ID_EXT_SECTION: u16 = 112;
-pub const ID_EXT_PERITEM: u16 = 113;
+pub const ID_EXT_STYLE: u16 = 112;
+pub const ID_SECTION_SPOT: u16 = 113;
 
 pub const ID_PLACE: u16 = 120;
 pub const ID_SUB_NAME: u16 = 121;
@@ -352,15 +352,29 @@ pub fn build() -> Template {
 // ① どんな項目にするか
 // ---------------------------------------------------------------------------
 
-/// 引数欄の高さ（3 行ぶん）
-const ARGS_H: i16 = 30;
+/// 引数欄の高さの下限（3 行ぶん）
+const ARGS_MIN: i16 = 30;
+
+/// 引数欄の高さ
+///
+/// **余ったぶんはここに足す。** ② が伸びると ① の下に空白ができるが、
+/// 空けておくより引数欄を高くしたほうが役に立つ（長いコマンドラインは
+/// 3 行では読めない）。列の高さが揃うので、枠の下端も揃う。
+fn args_height() -> i16 {
+    ARGS_MIN + (column2_height() - column1_base()).max(0)
+}
 
 fn column1_height() -> i16 {
+    column1_base() + (column2_height() - column1_base()).max(0)
+}
+
+/// 引数欄を下限にしたときの ① の高さ
+fn column1_base() -> i16 {
     GROUP_TOP
         + (LABEL_H + TIGHT + EDIT_H + LOOSE) * 3
         + LABEL_H
         + TIGHT
-        + ARGS_H
+        + ARGS_MIN
         + 3
         + EDIT_H
         + 3
@@ -427,9 +441,17 @@ fn column1(words: &mut Vec<u16>, top: i16) {
 
     label(words, x, &mut y, INNER_W, "渡す引数");
     push_item(
-        words, STYLE_WRAP, x, y, INNER_W, ARGS_H, ID_ARGS, ATOM_EDIT, "",
+        words,
+        STYLE_WRAP,
+        x,
+        y,
+        INNER_W,
+        args_height(),
+        ID_ARGS,
+        ATOM_EDIT,
+        "",
     );
-    y += ARGS_H + 3;
+    y += args_height() + 3;
 
     // 挿入は**選んだ直後ではなくボタンを押したとき**に入れる。
     // CBS_DROPDOWNLIST は矢印キーで辿るたびに CBN_SELCHANGE を飛ばすので、
@@ -508,9 +530,13 @@ fn group2a_height() -> i16 {
         + LOOSE
         + LABEL_H
         + TIGHT
-        + CHECK_H
-        + 1
-        + CHECK_H
+        + EDIT_H
+        + LOOSE
+        + LABEL_H
+        + TIGHT
+        + EDIT_H
+        + 3
+        + LABEL_H
         + GROUP_BOTTOM
 }
 
@@ -571,29 +597,41 @@ fn column2(words: &mut Vec<u16>, top: i16) {
     );
     y += LOOSE;
 
+    // **ラジオではなくコンボ。** 書き方が 5 つになると、並べたときの縦が
+    // 効いてくるうえ、下の 3 つ（差分）は使う人が限られる
     label(words, x, &mut y, INNER_W, "拡張子の書き方");
     push_item(
         words,
-        STYLE_RADIO_FIRST,
+        STYLE_COMBOBOX,
         x,
         y,
         INNER_W,
-        CHECK_H,
-        ID_EXT_SECTION,
-        ATOM_BUTTON,
-        "セクションの見出しにする（[.png .jpg]）",
+        EDIT_H + 12 * 5,
+        ID_EXT_STYLE,
+        ATOM_COMBOBOX,
+        "",
     );
-    y += CHECK_H + 1;
+    y += EDIT_H + LOOSE;
+
+    label(words, x, &mut y, INNER_W, "貼り先のセクション");
     push_item(
         words,
-        STYLE_RADIO,
+        STYLE_COMBOBOX,
         x,
         y,
         INNER_W,
-        CHECK_H,
-        ID_EXT_PERITEM,
-        ATOM_BUTTON,
-        "項目の行に書く（名前 [.png .jpg] | …）",
+        EDIT_H + 12 * 8,
+        ID_SECTION_SPOT,
+        ATOM_COMBOBOX,
+        "",
+    );
+    y += EDIT_H + 3;
+    hint(
+        words,
+        x,
+        &mut y,
+        INNER_W,
+        "差分（足す・引く・そのまま）を選んだときだけ使います",
     );
 
     // --- ③ ---
@@ -1251,11 +1289,10 @@ mod tests {
             column2_height(),
             "② と起動されるものの高さが揃っていない"
         );
-        assert!(
-            (column2_height() - column1_height()).abs() < 10,
-            "① と ② の高さが離れすぎ: {} と {}",
+        assert_eq!(
             column1_height(),
-            column2_height()
+            column2_height(),
+            "① と ② の高さが揃っていない（余りは引数欄に足す）"
         );
     }
 

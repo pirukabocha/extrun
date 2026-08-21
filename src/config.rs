@@ -846,7 +846,10 @@ pub fn as_alias_def(text: &str) -> Option<(&str, &str)> {
 }
 
 /// `[...]` だけの行ならその中身を返す
-fn as_section(text: &str) -> Option<&str> {
+///
+/// **`extrun-make` の「貼り先のセクション」もここを呼ぶ。** 見分け方を 2 か所に
+/// 書くと、片方だけが `[a] b` のような行を通す事故になる。
+pub fn as_section(text: &str) -> Option<&str> {
     let inner = text.strip_prefix('[')?.strip_suffix(']')?;
     Some(inner)
 }

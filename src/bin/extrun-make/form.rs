@@ -13,6 +13,9 @@
 use extrun::text::{escape_name, escape_path};
 
 /// 拡張子をどこに書くか
+///
+/// 下の 3 つは**差分**なので、何からの差分なのかが決まらないと意味を持たない。
+/// 貼り先のセクションを選んでいないと出せない（`needs_section`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtStyle {
     /// セクションの見出しにする（`[.png .jpg]` の行が付く）
@@ -21,6 +24,37 @@ pub enum ExtStyle {
     ///
     /// 符号なし＝完全置換なので、**どのセクションの下に貼っても同じように動く**。
     PerItem,
+    /// 貼り先のセクションに足す（`名前 [+.svg]`）
+    Add,
+    /// 貼り先のセクションから引く（`名前 [-.jpg]`）
+    Remove,
+    /// 貼り先のセクションのまま使う（何も書かない）
+    Inherit,
+}
+
+impl ExtStyle {
+    /// 貼り先のセクションが決まっていないと使えないか
+    pub fn needs_section(self) -> bool {
+        matches!(self, ExtStyle::Add | ExtStyle::Remove | ExtStyle::Inherit)
+    }
+
+    /// 各要素に付ける符号
+    fn sign(self) -> &'static str {
+        match self {
+            ExtStyle::Add => "+",
+            ExtStyle::Remove => "-",
+            _ => "",
+        }
+    }
+}
+
+/// 差分を書くときの貼り先のセクション
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionSpot {
+    /// この行の下に貼る（そのセクションの最後の中身の行）
+    pub line: u32,
+    /// `[.png .jpg]` のような見出しの姿
+    pub label: String,
 }
 
 /// 今あるサブメニューに入れるときの貼り先
@@ -87,6 +121,8 @@ pub struct Form {
     // --- ② どのファイルで表示するか ---
     pub extensions: String,
     pub ext_style: ExtStyle,
+    /// 差分を書くときの貼り先（選んでいなければ `None`）
+    pub section: Option<SectionSpot>,
 
     // --- ③ メニューのどこに表示するか ---
     pub placement: Placement,
@@ -120,6 +156,7 @@ impl Default for Form {
             // 意図しない意味になる。貼ってすぐ動く値から始める
             extensions: "file".to_string(),
             ext_style: ExtStyle::Section,
+            section: None,
             placement: Placement::Root,
             submenu_name: String::new(),
             submenu_key: String::new(),
@@ -173,7 +210,7 @@ impl Form {
         if self.separator {
             out.push_str(marker);
             out.push_str("---");
-            if self.effective_ext_style() == ExtStyle::PerItem {
+            if writes_suffix(self.effective_ext_style()) {
                 out.push_str(&self.extension_suffix());
             }
             out.push_str("\r\n");
@@ -186,7 +223,7 @@ impl Form {
         }
         out.push_str(&escape_name(self.name.trim()));
         out.push_str(&accesskey(&self.key));
-        if self.effective_ext_style() == ExtStyle::PerItem {
+        if writes_suffix(self.effective_ext_style()) {
             out.push_str(&self.extension_suffix());
         }
 
@@ -241,21 +278,40 @@ impl Form {
     /// 何行目の下に貼るか（`None` なら末尾）
     ///
     /// **プレビューはここに差し込んで解析する。** 末尾に繋げると、`>` の付いた
-    /// 行がファイル最後のルート項目にぶら下がり、プレビューが嘘になる。
+    /// 行がファイル最後のルート項目にぶら下がり、差分の書き方も別のセクションを
+    /// 継承してしまう。どちらもプレビューが嘘になる。
     pub fn paste_line(&self) -> Option<u32> {
-        match &self.placement {
-            Placement::Existing(spot) => Some(spot.line),
-            _ => None,
+        if let Placement::Existing(spot) = &self.placement {
+            return Some(spot.line);
         }
+        if self.ext_style.needs_section() {
+            return self.section.as_ref().map(|section| section.line);
+        }
+        None
     }
 
-    /// `[.png .jpg]` の形（項目の行に書くとき）
+    /// `[.png .jpg]` や `[+.svg]` の形（項目の行に書くとき）
+    ///
+    /// **符号は各要素に付ける。** 別名は展開されてから空白で区切られるので、
+    /// `[+@画像]` は `[+.png .jpg]` になり符号ありと符号なしの混在エラーになる
+    /// （仕様どおり）。ここでは各要素に付けるだけにして、別名を差分に使った
+    /// ときはプレビューがそのエラーを見せる — 黙って通すより気づける。
     fn extension_suffix(&self) -> String {
         let extensions = self.extensions.trim();
         if extensions.is_empty() {
             return String::new();
         }
-        format!(" [{}]", extensions)
+
+        let sign = self.effective_ext_style().sign();
+        if sign.is_empty() {
+            return format!(" [{}]", extensions);
+        }
+
+        let signed: Vec<String> = extensions
+            .split_whitespace()
+            .map(|token| format!("{}{}", sign, token))
+            .collect();
+        format!(" [{}]", signed.join(" "))
     }
 
     /// 書き出す名前付きフィールドを順に返す
@@ -308,14 +364,30 @@ impl Form {
     /// ファイルの途中に書き込む（＝この道具が設定ファイルを書き換える）のは
     /// 避けたいので、**書かずに場所を教える**。
     pub fn paste_hint(&self) -> String {
-        match &self.placement {
-            Placement::Existing(spot) => format!(
+        if let Placement::Existing(spot) = &self.placement {
+            return format!(
                 "extrun-config.txt の {} 行目、「{}」の最後の項目の下に貼り付けてください",
                 spot.line, spot.label
-            ),
-            _ => "extrun-config.txt の末尾に貼り付ければ、そのまま動きます".to_string(),
+            );
         }
+        if self.ext_style.needs_section() {
+            return match &self.section {
+                Some(section) => format!(
+                    "extrun-config.txt の {} 行目、{} の最後の項目の下に貼り付けてください",
+                    section.line, section.label
+                ),
+                None => "貼り先のセクションを選んでください".to_string(),
+            };
+        }
+        "extrun-config.txt の末尾に貼り付ければ、そのまま動きます".to_string()
     }
+}
+
+/// 項目の行に `[...]` を書く書き方か
+///
+/// 「セクションのまま使う」は**何も書かない**のが正解（書けば差分ではなくなる）。
+fn writes_suffix(style: ExtStyle) -> bool {
+    matches!(style, ExtStyle::PerItem | ExtStyle::Add | ExtStyle::Remove)
 }
 
 /// ` (&X)` の形にする。空なら何も付けない
@@ -492,6 +564,112 @@ mod tests {
         assert!(!parsed.has_error(), "{}", 診断(&parsed));
         // 符号なしなので、貼り先の [folder] を無視して置き換わる
         assert_eq!(parsed.config.apps[0].extensions, [".png", ".jpg", ".jpeg"]);
+    }
+
+    fn 貼り先セクション() -> SectionSpot {
+        SectionSpot {
+            line: 12,
+            label: "[.png .jpg .gif]".to_string(),
+        }
+    }
+
+    /// 符号は各要素に付ける（別名は展開後に空白で区切られるため）
+    #[test]
+    fn セクションに足す() {
+        let form = Form {
+            ext_style: ExtStyle::Add,
+            extensions: ".svg .eps".to_string(),
+            section: Some(貼り先セクション()),
+            ..見本()
+        };
+        let text = form.to_config().replace("\r\n", "\n");
+        assert!(text.contains("(&Z) [+.svg +.eps] |"), "{}", text);
+        assert!(!text.lines().any(|line| line.starts_with('[')), "{}", text);
+    }
+
+    #[test]
+    fn セクションから引く() {
+        let form = Form {
+            ext_style: ExtStyle::Remove,
+            extensions: ".jpg".to_string(),
+            section: Some(貼り先セクション()),
+            ..見本()
+        };
+        assert!(
+            form.to_config().contains("(&Z) [-.jpg] |"),
+            "{}",
+            form.to_config()
+        );
+    }
+
+    /// 「セクションのまま使う」は何も書かない（書けば差分ではなくなる）
+    #[test]
+    fn セクションのまま使うと何も書かない() {
+        let form = Form {
+            ext_style: ExtStyle::Inherit,
+            section: Some(貼り先セクション()),
+            ..見本()
+        };
+        let text = form.to_config();
+        assert!(!text.contains('['), "{}", text);
+        assert!(text.contains("(&Z) | %SystemRoot%"), "{}", text);
+    }
+
+    /// 差分は貼り先のセクションの中に差し込まないと、別のものからの差分になる
+    #[test]
+    fn 差分は貼り先の行を持つ() {
+        let form = Form {
+            ext_style: ExtStyle::Add,
+            section: Some(貼り先セクション()),
+            ..見本()
+        };
+        assert_eq!(form.paste_line(), Some(12));
+        assert!(
+            form.paste_hint().contains("12 行目"),
+            "{}",
+            form.paste_hint()
+        );
+        assert!(
+            form.paste_hint().contains("[.png .jpg .gif]"),
+            "{}",
+            form.paste_hint()
+        );
+    }
+
+    #[test]
+    fn 貼り先を選んでいなければそう言う() {
+        let form = Form {
+            ext_style: ExtStyle::Add,
+            section: None,
+            ..見本()
+        };
+        assert_eq!(form.paste_line(), None);
+        assert!(
+            form.paste_hint().contains("選んでください"),
+            "{}",
+            form.paste_hint()
+        );
+    }
+
+    /// 完全置換と差分で、書き方が変わることを 1 か所で確かめる
+    #[test]
+    fn 書き方ごとの姿() {
+        let 姿 = |style: ExtStyle| {
+            Form {
+                ext_style: style,
+                extensions: ".svg".to_string(),
+                section: Some(貼り先セクション()),
+                ..見本()
+            }
+            .to_config()
+            .replace("\r\n", "\n")
+        };
+
+        assert!(姿(ExtStyle::Section).starts_with("[.svg]\n"));
+        assert!(姿(ExtStyle::PerItem).contains("[.svg]"));
+        assert!(姿(ExtStyle::Add).contains("[+.svg]"));
+        assert!(姿(ExtStyle::Remove).contains("[-.svg]"));
+        assert!(!姿(ExtStyle::Inherit).contains('['));
     }
 
     #[test]

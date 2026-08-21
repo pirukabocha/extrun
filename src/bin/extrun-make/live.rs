@@ -23,7 +23,7 @@
 自前で書くと、プレビューが `--preview` と違うことを言い出す。
 */
 
-use extrun::config::{self, MenuItem};
+use extrun::config::{self, MenuItem, Severity};
 use extrun::placeholder::RunContext;
 use extrun::{Target, filter, preview};
 use std::path::{Path, PathBuf};
@@ -146,6 +146,23 @@ pub fn describe(
     }
 
     let mut out = String::new();
+
+    // **作った行への警告だけを出す。** 設定ファイル全体の警告を並べると、
+    // このツールで作ったものと関係のない指摘で埋まる
+    if let Some(range) = made.clone() {
+        let warnings: Vec<&config::Diag> = parsed
+            .diags
+            .iter()
+            .filter(|diag| diag.severity == Severity::Warning && range.contains(&diag.line))
+            .collect();
+        if !warnings.is_empty() {
+            for diag in warnings {
+                out.push_str(&format!("警告　{}\r\n", diag.message));
+            }
+            out.push_str("\r\n");
+        }
+    }
+
     out.push_str("対象:\r\n");
     for target in &targets {
         out.push_str(&format!(
@@ -397,6 +414,29 @@ mod tests {
                 .to_string()
         };
         assert_eq!(行(&単体), 行(&途中), "行番号がずれている");
+    }
+
+    /// 引き切って空にすると「すべての対象」になる、という仕様の落とし穴を
+    /// `--check` を待たずにその場で知らせる
+    #[test]
+    fn 作った行への警告を出す() {
+        let 元 = "[.txt]\r\nA | C:\\a.exe\r\n";
+        let 本文 = super::describe(
+            元,
+            Some(2),
+            "X [-.txt] | C:\\x.exe | $p\r\n",
+            r"C:\a.txt",
+            Count::One,
+        );
+        assert!(本文.contains("警告"), "{}", 本文);
+    }
+
+    /// 設定ファイル側の警告まで並べると、関係のない指摘で埋まる
+    #[test]
+    fn 設定ファイル側の警告は出さない() {
+        let 元 = "[.txt]\r\n古い項目 | C:\\存在しない.exe\r\n";
+        let 本文 = describe_with(元, "[.png]\r\n\r\nX | C:\\a.exe | $p\r\n");
+        assert!(!本文.contains("存在しない"), "{}", 本文);
     }
 
     /// サブメニューを作ったときは、親ではなく中身を見せる

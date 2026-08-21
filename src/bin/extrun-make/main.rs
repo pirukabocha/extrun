@@ -23,7 +23,7 @@ mod presets;
 use std::ptr::null_mut;
 
 use extrun::dialog::{show_modal, to_wide};
-use form::{ExtStyle, Form, Placement, Spot, WhenKind};
+use form::{ExtStyle, Form, Placement, SectionSpot, Spot, WhenKind};
 use layout::*;
 use live::Count;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
@@ -255,6 +255,18 @@ unsafe fn init(hwnd: HWND, app: &mut App) {
         combo_fill(hwnd, ID_PLACE, &place_choices(&app.existing));
         combo_fill(
             hwnd,
+            ID_EXT_STYLE,
+            &[
+                "セクションの見出しにする（[.png .jpg]）".to_string(),
+                "項目の行に書く（名前 [.png .jpg] | …）".to_string(),
+                "貼り先のセクションに足す（[+.svg]）".to_string(),
+                "貼り先のセクションから引く（[-.jpg]）".to_string(),
+                "貼り先のセクションのまま使う（何も書かない）".to_string(),
+            ],
+        );
+        combo_fill(hwnd, ID_SECTION_SPOT, &section_choices(&app.existing));
+        combo_fill(
+            hwnd,
             ID_WHEN,
             &[
                 "いつも表示する".to_string(),
@@ -395,11 +407,21 @@ unsafe fn read_form(hwnd: HWND, app: &mut App) {
         form.all_mode = checked(hwnd, ID_ALL_MODE);
 
         form.extensions = get_text(hwnd, ID_EXT);
-        form.ext_style = if checked(hwnd, ID_EXT_PERITEM) {
-            ExtStyle::PerItem
-        } else {
-            ExtStyle::Section
+        form.ext_style = match combo_selection(hwnd, ID_EXT_STYLE) {
+            1 => ExtStyle::PerItem,
+            2 => ExtStyle::Add,
+            3 => ExtStyle::Remove,
+            4 => ExtStyle::Inherit,
+            _ => ExtStyle::Section,
         };
+        form.section = app
+            .existing
+            .sections
+            .get(combo_selection(hwnd, ID_SECTION_SPOT).max(0) as usize)
+            .map(|section| SectionSpot {
+                line: section.end_line,
+                label: format!("[{}]", section.spec),
+            });
 
         form.placement = placement_at(&app.existing, combo_selection(hwnd, ID_PLACE));
         form.submenu_name = get_text(hwnd, ID_SUB_NAME);
@@ -439,7 +461,8 @@ unsafe fn write_form(hwnd: HWND, form: &Form) {
         combo_select(hwnd, ID_EXT_KIND, 0);
         combo_select(hwnd, ID_PLACE, 0);
         combo_select(hwnd, ID_WHEN, 0);
-        check(hwnd, ID_EXT_SECTION, true);
+        combo_select(hwnd, ID_EXT_STYLE, 0);
+        combo_select(hwnd, ID_SECTION_SPOT, 0);
     }
 }
 
@@ -460,8 +483,14 @@ unsafe fn sync_enabled(hwnd: HWND, form: &Form) {
         // 今あるサブメニューに入れるときは、必ず項目の行に書く。
         // 見出しを親と子のあいだに挟むと、そこから下の対象がまとめて変わる
         let choosable = !matches!(form.placement, Placement::Existing(_));
-        enable(hwnd, ID_EXT_SECTION, choosable);
-        enable(hwnd, ID_EXT_PERITEM, choosable);
+        enable(hwnd, ID_EXT_STYLE, choosable);
+
+        // 貼り先のセクションは、差分を選んだときだけ効く
+        enable(
+            hwnd,
+            ID_SECTION_SPOT,
+            choosable && form.ext_style.needs_section(),
+        );
 
         enable(hwnd, ID_CONFIRM_MESSAGE, form.confirm);
         enable(hwnd, ID_DELAY_MS, form.delay);
@@ -974,6 +1003,25 @@ fn place_choices(existing: &existing::Existing) -> Vec<String> {
         choices.push(format!("「{}」の中", submenu.label));
     }
     choices
+}
+
+/// 「貼り先のセクション」に並べるもの
+///
+/// 差分（`+` / `-` / そのまま）は**何からの差分なのか**が決まらないと
+/// 意味を持たないので、ここで選ばせる。読めなかった人には空のまま出て、
+/// 差分の書き方を選んでも「貼り先のセクションを選んでください」と出る。
+fn section_choices(existing: &existing::Existing) -> Vec<String> {
+    existing
+        .sections
+        .iter()
+        .map(|section| {
+            format!(
+                "{} 行目  [{}]",
+                section.line,
+                existing::head(&section.spec, 30)
+            )
+        })
+        .collect()
 }
 
 /// コンボの位置から置き場所を決める

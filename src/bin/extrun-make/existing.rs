@@ -40,6 +40,17 @@ pub struct Submenu {
     pub last_line: u32,
 }
 
+/// 今あるセクション 1 つぶん
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    /// 見出しの中身（`.png .jpg` や `@画像`）
+    pub spec: String,
+    /// 見出しの行
+    pub line: u32,
+    /// **この行の下に貼る**（このセクションの最後の中身の行）
+    pub end_line: u32,
+}
+
 /// 読み込んだ設定ファイル
 pub struct Existing {
     /// 読めたファイルの場所（読めなければ `None`）
@@ -48,6 +59,8 @@ pub struct Existing {
     pub aliases: Vec<Alias>,
     /// 今あるサブメニュー（2 階層目まで）
     pub submenus: Vec<Submenu>,
+    /// 今あるセクション見出し（書かれた順）
+    pub sections: Vec<Section>,
     /// プレビューで前に繋げる本文
     ///
     /// **書式が壊れているファイルは繋げない。** 繋げると、このツールで
@@ -81,6 +94,11 @@ impl Existing {
         } else {
             collect_submenus(&parsed.config.apps)
         };
+        let sections = if parsed.has_error() {
+            Vec::new()
+        } else {
+            collect_sections(&text)
+        };
         let problem = if parsed.has_error() {
             Some(format!(
                 "設定ファイルに {} 件の問題があります（extrun.exe --check で確認できます）",
@@ -100,6 +118,7 @@ impl Existing {
             path: Some(path),
             aliases,
             submenus,
+            sections,
             problem,
         }
     }
@@ -109,6 +128,7 @@ impl Existing {
             path: None,
             aliases: Vec::new(),
             submenus: Vec::new(),
+            sections: Vec::new(),
             prefix: String::new(),
             problem: None,
         }
@@ -137,6 +157,61 @@ impl Existing {
             Some(_) => format!("設定ファイルから別名を {} 件読みました", self.aliases.len()),
         }
     }
+}
+
+/// 今あるセクション見出しを、書かれた順に集める
+///
+/// **見分け方は `config::as_section` に任せる。** 自前で `[` と `]` を見ると、
+/// 片方だけが `[a] b` のような行を通す事故になる。
+///
+/// 貼り先は**見出しの行ではなく、そのセクションの最後の中身の行**。
+/// 見出しの直後に入れると、既にある項目より前に割り込む。空行を跨がないよう、
+/// 中身のある最後の行まで下げる。
+fn collect_sections(text: &str) -> Vec<Section> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut found: Vec<Section> = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        let Some(spec) = config::as_section(trimmed) else {
+            continue;
+        };
+        // `[extrun]` は拡張子のセクションではない
+        if spec.eq_ignore_ascii_case("extrun") {
+            continue;
+        }
+
+        let line_number = index as u32 + 1;
+        if let Some(previous) = found.last_mut() {
+            previous.end_line = last_content_line(&lines, previous.line, line_number - 1);
+        }
+        found.push(Section {
+            spec: spec.trim().to_string(),
+            line: line_number,
+            end_line: line_number,
+        });
+    }
+
+    if let Some(last) = found.last_mut() {
+        last.end_line = last_content_line(&lines, last.line, lines.len() as u32);
+    }
+    found
+}
+
+/// `from`〜`to` の範囲で、中身のある最後の行
+fn last_content_line(lines: &[&str], from: u32, to: u32) -> u32 {
+    let mut result = from;
+    for number in from..=to {
+        if let Some(line) = lines.get(number as usize - 1) {
+            if !line.trim().is_empty() {
+                result = number;
+            }
+        }
+    }
+    result
 }
 
 /// 今あるサブメニューを、書かれた順に集める
@@ -294,6 +369,7 @@ mod tests {
             prefix: String::new(),
             problem: None,
             submenus: Vec::new(),
+            sections: Vec::new(),
             aliases: vec![
                 Alias {
                     name: "画像".into(),
@@ -401,10 +477,47 @@ mod tests {
     }
 
     #[test]
+    fn 今あるセクションを集める() {
+        let 本文 = "@a = b\r\n\
+            \r\n\
+            [.png .jpg]\r\n\
+            X | C:\\a.exe\r\n\
+            Y | C:\\b.exe\r\n\
+            \r\n\
+            [folder]\r\n\
+            Z | C:\\c.exe\r\n\
+            \r\n";
+        let 節 = collect_sections(本文);
+
+        assert_eq!(節.len(), 2);
+        assert_eq!(節[0].spec, ".png .jpg");
+        assert_eq!(節[0].line, 3);
+        // 空行を跨がず、中身のある最後の行まで
+        assert_eq!(節[0].end_line, 5);
+        assert_eq!(節[1].spec, "folder");
+        assert_eq!(節[1].end_line, 8);
+    }
+
+    /// `[extrun]` は拡張子のセクションではない
+    #[test]
+    fn グローバル設定は集めない() {
+        let 本文 = "[extrun]\r\nicons = auto\r\n\r\n[file]\r\nX | C:\\a.exe\r\n";
+        let 節 = collect_sections(本文);
+        assert_eq!(節.len(), 1);
+        assert_eq!(節[0].spec, "file");
+    }
+
+    #[test]
+    fn コメントの中の見出しは拾わない() {
+        assert!(collect_sections("# [.png]\r\n").is_empty());
+    }
+
+    #[test]
     fn 読めなければ何も無い状態になる() {
         let empty = Existing::empty();
         assert!(empty.aliases.is_empty());
         assert!(empty.submenus.is_empty());
+        assert!(empty.sections.is_empty());
         assert!(empty.prefix.is_empty());
         assert!(empty.status().contains("見つかりません"));
     }
