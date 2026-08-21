@@ -9,8 +9,8 @@
 3 分割）なので、欄が狭くなってはいない。
 
     ┌① どんな項目に──┐ ┌② どのファイルで─┐ ┌④ 作成した設定──┐
-    │                  │ └──────────────────┘ │                  │
-    │                  │ ┌③ メニューのどこに┐ │                  │
+    │                  │ └──────────────────┘ └──────────────────┘
+    │                  │ ┌③ メニューのどこに┐ ┌⑤ 起動されるもの─┐
     └──────────────────┘ └──────────────────┘ └──────────────────┘
     ---------------- 詳細設定を開く ▼ ----------------
     ┌実行のしかた──────┐ ┌場所と見た目──────┐ ┌表示の条件────────┐
@@ -59,6 +59,12 @@ pub const ID_SEPARATOR: u16 = 123;
 pub const ID_PASTE_HINT: u16 = 130;
 pub const ID_OUTPUT: u16 = 131;
 pub const ID_COPY: u16 = 132;
+
+pub const ID_TRY_PATH: u16 = 133;
+pub const ID_TRY_BROWSE: u16 = 134;
+pub const ID_COUNT_ONE: u16 = 135;
+pub const ID_COUNT_THREE: u16 = 136;
+pub const ID_PREVIEW: u16 = 137;
 
 pub const ID_FOLD: u16 = 140;
 /// 下の帯の説明（開閉に合わせて動かすので ID が要る）
@@ -145,6 +151,48 @@ const STYLE_OUTPUT: u32 = WS_CHILD
 /// Enter は既定のボタンに行き、**改行は入らない**（引数は 1 行のもの）。
 const STYLE_WRAP: u32 = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_MULTILINE as u32;
 
+/// 伸縮してよい 2 つの欄の高さ
+///
+/// **伸縮してよいのはこの 2 つだけ。** フォームの行を縮めると読めなくなる。
+/// 画面に収まる範囲でできるだけ大きく取り、収まらない環境では下限まで縮める。
+#[derive(Debug, Clone, Copy)]
+pub struct Elastic {
+    /// ④ 作成した設定
+    pub output: i16,
+    /// ⑤ この設定で起動されるもの
+    pub preview: i16,
+}
+
+impl Elastic {
+    /// ゆとりのある画面での大きさ
+    pub const IDEAL: Elastic = Elastic {
+        output: 100,
+        preview: 140,
+    };
+    /// これ以上は縮めない（3 行ぶん）
+    const FLOOR: i16 = 24;
+
+    /// 使える高さに合わせて縮める
+    ///
+    /// **④ から先に縮める。** ④ は貼るためのもので全部を読む必要がないが、
+    /// ⑤ は読むためのものなので、削るなら ④ が先。
+    pub fn fit(available: i16) -> Elastic {
+        let mut elastic = Elastic::IDEAL;
+        let mut over = expanded_height_for(elastic) - available;
+
+        if over > 0 {
+            let cut = over.min(elastic.output - Elastic::FLOOR);
+            elastic.output -= cut;
+            over -= cut;
+        }
+        if over > 0 {
+            let cut = over.min(elastic.preview - Elastic::FLOOR);
+            elastic.preview -= cut;
+        }
+        elastic
+    }
+}
+
 /// 組み立てたテンプレートと、切り替えに要る高さ
 pub struct Template {
     pub words: Vec<u32>,
@@ -154,17 +202,27 @@ pub struct Template {
     pub expanded_height: i16,
 }
 
+/// 詰めものを除いた本体の下端
+fn body_bottom(elastic: Elastic) -> i16 {
+    MARGIN
+        + [column1_height(), column2_height(), column3_height(elastic)]
+            .into_iter()
+            .max()
+            .unwrap_or(0)
+}
+
+/// 詳細設定を開いたときのダイアログの高さ
+fn expanded_height_for(elastic: Elastic) -> i16 {
+    body_bottom(elastic) + 8 + BUTTON_HEIGHT + 8 + detail_height() + 8 + BUTTON_HEIGHT + MARGIN
+}
+
 /// メイン画面のテンプレートを組み立てる
-pub fn build() -> Template {
+pub fn build(elastic: Elastic) -> Template {
     let mut words: Vec<u16> = Vec::new();
     let mut decor = DETAIL_DECOR_FIRST;
 
     // 先に高さを出す（見出しに書く必要があるので、項目より前に確定させる）
-    let body_bottom = MARGIN
-        + [column1_height(), column2_height(), column3_height()]
-            .into_iter()
-            .max()
-            .unwrap_or(0);
+    let body_bottom = body_bottom(elastic);
     let fold_y = body_bottom + 8;
     let detail_y = fold_y + BUTTON_HEIGHT + 8;
     let detail_height = detail_height();
@@ -186,7 +244,7 @@ pub fn build() -> Template {
 
     column1(&mut words);
     column2(&mut words);
-    column3(&mut words);
+    column3(&mut words, elastic);
 
     // --- 折りたたみ ---
     push_item(
@@ -567,26 +625,43 @@ fn column2(words: &mut Vec<u16>) {
 }
 
 // ---------------------------------------------------------------------------
-// ④ 作成した設定
+// ④ 作成した設定 / ⑤ この設定で起動されるもの
 // ---------------------------------------------------------------------------
 
-/// 出力欄の高さ
-///
-/// **いちばん高い列に合わせて決めてある。** 3 列の下端が揃っていないと、
-/// 枠を付けたときに不揃いがそのまま見える。伸縮してよい唯一の欄でもある
-/// （画面に収まらないときはここだけを縮める）。
-const OUTPUT_H: i16 = 175;
-
-fn column3_height() -> i16 {
-    GROUP_TOP + LABEL_H + 3 + OUTPUT_H + 5 + BUTTON_HEIGHT + GROUP_BOTTOM
+fn group4_height(elastic: Elastic) -> i16 {
+    GROUP_TOP + LABEL_H + 3 + elastic.output + 5 + BUTTON_HEIGHT + GROUP_BOTTOM
 }
 
-fn column3(words: &mut Vec<u16>) {
+fn group5_height(elastic: Elastic) -> i16 {
+    GROUP_TOP
+        + LABEL_H
+        + TIGHT
+        + EDIT_H
+        + LOOSE
+        + LABEL_H
+        + TIGHT
+        + CHECK_H
+        + 4
+        + elastic.preview
+        + GROUP_BOTTOM
+}
+
+fn column3_height(elastic: Elastic) -> i16 {
+    group4_height(elastic) + 8 + group5_height(elastic)
+}
+
+fn column3(words: &mut Vec<u16>, elastic: Elastic) {
     let frame = col_x(2);
     let x = frame + GROUP_PAD;
     let mut y = MARGIN + GROUP_TOP;
 
-    frame_box(words, frame, MARGIN, column3_height(), "④ 作成した設定");
+    frame_box(
+        words,
+        frame,
+        MARGIN,
+        group4_height(elastic),
+        "④ 作成した設定",
+    );
 
     push_item(
         words,
@@ -607,12 +682,12 @@ fn column3(words: &mut Vec<u16>) {
         x,
         y,
         INNER_W,
-        OUTPUT_H,
+        elastic.output,
         ID_OUTPUT,
         ATOM_EDIT,
         "",
     );
-    y += OUTPUT_H + 5;
+    y += elastic.output + 5;
 
     push_item(
         words,
@@ -624,6 +699,82 @@ fn column3(words: &mut Vec<u16>) {
         ID_COPY,
         ATOM_BUTTON,
         "クリップボードにコピー",
+    );
+
+    // --- ⑤ ---
+    let top = MARGIN + group4_height(elastic) + 8;
+    let mut y = top + GROUP_TOP;
+
+    frame_box(
+        words,
+        frame,
+        top,
+        group5_height(elastic),
+        "⑤ この設定で起動されるもの",
+    );
+
+    label(words, x, &mut y, INNER_W, "試す対象");
+    push_item(
+        words,
+        STYLE_EDIT,
+        x,
+        y,
+        INNER_W - 44,
+        EDIT_H,
+        ID_TRY_PATH,
+        ATOM_EDIT,
+        "",
+    );
+    push_item(
+        words,
+        STYLE_BUTTON,
+        x + INNER_W - 42,
+        y,
+        42,
+        BUTTON_HEIGHT,
+        ID_TRY_BROWSE,
+        ATOM_BUTTON,
+        "参照…",
+    );
+    y += EDIT_H + LOOSE;
+
+    // 1 つと 3 つを切り替えられるのが肝。`+` や `:when` や `$i` / `$c` の
+    // ように、複数選ばないと現れない違いは絵にしないと伝わらない
+    label(words, x, &mut y, INNER_W, "選んだ数");
+    push_item(
+        words,
+        STYLE_RADIO_FIRST,
+        x,
+        y,
+        60,
+        CHECK_H,
+        ID_COUNT_ONE,
+        ATOM_BUTTON,
+        "1 つ",
+    );
+    push_item(
+        words,
+        STYLE_RADIO,
+        x + 66,
+        y,
+        60,
+        CHECK_H,
+        ID_COUNT_THREE,
+        ATOM_BUTTON,
+        "3 つ",
+    );
+    y += CHECK_H + 4;
+
+    push_item(
+        words,
+        STYLE_OUTPUT,
+        x,
+        y,
+        INNER_W,
+        elastic.preview,
+        ID_PREVIEW,
+        ATOM_EDIT,
+        "",
     );
 }
 
@@ -939,4 +1090,56 @@ fn group(
         text,
     );
     *decor += 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ゆとりがあるときは削らない
+    #[test]
+    fn 収まるなら理想の大きさのまま() {
+        let 大きい画面 = expanded_height_for(Elastic::IDEAL) + 100;
+        let elastic = Elastic::fit(大きい画面);
+        assert_eq!(elastic.output, Elastic::IDEAL.output);
+        assert_eq!(elastic.preview, Elastic::IDEAL.preview);
+    }
+
+    /// ④ は貼るためのもので全部を読む必要が無いので、削るならこちらが先
+    #[test]
+    fn 足りなければ作成した設定から削る() {
+        let elastic = Elastic::fit(expanded_height_for(Elastic::IDEAL) - 20);
+        assert_eq!(elastic.output, Elastic::IDEAL.output - 20);
+        assert_eq!(elastic.preview, Elastic::IDEAL.preview);
+    }
+
+    /// ④ を下限まで削ってなお足りなければ ⑤ にも手を付ける
+    #[test]
+    fn それでも足りなければプレビューも削る() {
+        let 削る = (Elastic::IDEAL.output - Elastic::FLOOR) + 30;
+        let elastic = Elastic::fit(expanded_height_for(Elastic::IDEAL) - 削る);
+        assert_eq!(elastic.output, Elastic::FLOOR);
+        assert_eq!(elastic.preview, Elastic::IDEAL.preview - 30);
+    }
+
+    /// 極端に狭い画面でも 3 行ぶんは残す（潰すと何も読めなくなる）
+    #[test]
+    fn 下限より小さくはしない() {
+        let elastic = Elastic::fit(0);
+        assert_eq!(elastic.output, Elastic::FLOOR);
+        assert_eq!(elastic.preview, Elastic::FLOOR);
+    }
+
+    /// 1920x1080 の 150%（作業領域から出る上限がおよそ 425 dlu）でも収まる
+    #[test]
+    fn 手狭な環境でも画面に収まる() {
+        let 上限 = 425;
+        let elastic = Elastic::fit(上限);
+        assert!(
+            expanded_height_for(elastic) <= 上限,
+            "{} > {}",
+            expanded_height_for(elastic),
+            上限
+        );
+    }
 }

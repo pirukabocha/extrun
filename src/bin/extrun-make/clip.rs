@@ -58,12 +58,25 @@ pub fn copy(hwnd: HWND, text: &str) -> bool {
 /// 打たずに済む。フォルダを選ぶ側（`:dir`）には付けていない —
 /// あの欄には `$d` のようなプレースホルダーを書くことの方が多いため。
 pub fn pick_executable(hwnd: HWND) -> Option<String> {
+    pick(
+        hwnd,
+        "起動するアプリを選ぶ",
+        "プログラム (*.exe;*.bat;*.cmd)\0*.exe;*.bat;*.cmd\0すべてのファイル\0*.*\0\0",
+    )
+}
+
+/// 試す対象を選ばせる
+///
+/// **絞り込みを掛けない。** ⑤ は「このファイルを選んだらどうなるか」を見る
+/// ためのもので、種類を限る理由が無い。
+pub fn pick_any(hwnd: HWND) -> Option<String> {
+    pick(hwnd, "試す対象を選ぶ", "すべてのファイル\0*.*\0\0")
+}
+
+fn pick(hwnd: HWND, title: &str, filter: &str) -> Option<String> {
     // 絞り込みは NUL 区切りで、最後に NUL を 2 つ置く決まり
-    let filter: Vec<u16> =
-        "プログラム (*.exe;*.bat;*.cmd)\0*.exe;*.bat;*.cmd\0すべてのファイル\0*.*\0\0"
-            .encode_utf16()
-            .collect();
-    let title = to_wide("起動するアプリを選ぶ");
+    let filter: Vec<u16> = filter.encode_utf16().collect();
+    let title = to_wide(title);
     let mut file = vec![0u16; 1024];
 
     let mut options: OPENFILENAMEW = unsafe { std::mem::zeroed() };

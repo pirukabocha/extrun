@@ -15,13 +15,17 @@
 mod clip;
 mod form;
 mod layout;
+mod live;
+mod metrics;
 mod presets;
 
 use std::ptr::null_mut;
 
 use extrun::dialog::{show_modal, to_wide};
 use form::{ExtStyle, Form, Placement, WhenKind};
+use layout::Elastic;
 use layout::*;
+use live::Count;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::UI::HiDpi::{
@@ -48,19 +52,35 @@ struct App {
     expanded_height: i16,
     /// 組み立て直しを止める（値を流し込んでいる最中に鳴る通知を無視する）
     updating: bool,
+    /// ⑤ で試す対象のパスと、何個選んだことにするか
+    try_path: String,
+    count: Count,
 }
 
 fn main() {
     // ウィンドウを作る前に宣言する（`extrun` 本体と同じ理由）
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
 
-    let template = layout::build();
+    // **画面に収まる範囲でいちばん大きく取る。** ウィンドウを作る前に測るので、
+    // テンプレートは 1 回で正しい形になり、あとから縮めて周りを動かさずに済む
+    let available = metrics::available_height_dlu(
+        (DS_MODALFRAME | DS_SETFONT | DS_CENTER) as u32
+            | WS_POPUP
+            | WS_CAPTION
+            | WS_SYSMENU
+            | WS_MINIMIZEBOX,
+        WS_EX_APPWINDOW,
+    );
+    let template = layout::build(Elastic::fit(available));
+
     let mut app = App {
         form: Form::default(),
         expanded: false,
         folded_height: template.folded_height,
         expanded_height: template.expanded_height,
         updating: false,
+        try_path: live::DEFAULT_TARGET.to_string(),
+        count: Count::One,
     };
 
     let result = show_modal(
@@ -146,6 +166,8 @@ unsafe fn init(hwnd: HWND, app: &mut App) {
         combo_select(hwnd, ID_INSERT_LIST, 0);
 
         write_form(hwnd, &app.form);
+        set_text(hwnd, ID_TRY_PATH, &app.try_path);
+        check(hwnd, ID_COUNT_ONE, true);
         app.updating = false;
 
         // 詳細設定は畳んだ状態から始める
@@ -191,6 +213,15 @@ unsafe fn command(hwnd: HWND, app: &mut App, id: u16, notify: u32) -> isize {
             ID_APP_BROWSE => {
                 if let Some(path) = clip::pick_executable(hwnd) {
                     set_text(hwnd, ID_APP, &path);
+                    read_form(hwnd, app);
+                    rebuild(hwnd, app);
+                }
+                return 1;
+            }
+
+            ID_TRY_BROWSE => {
+                if let Some(path) = clip::pick_any(hwnd) {
+                    set_text(hwnd, ID_TRY_PATH, &path);
                     read_form(hwnd, app);
                     rebuild(hwnd, app);
                 }
@@ -279,6 +310,13 @@ unsafe fn read_form(hwnd: HWND, app: &mut App) {
         };
         form.dir = get_text(hwnd, ID_DIR);
         form.icon = get_text(hwnd, ID_ICON);
+
+        app.try_path = get_text(hwnd, ID_TRY_PATH);
+        app.count = if checked(hwnd, ID_COUNT_THREE) {
+            Count::Three
+        } else {
+            Count::One
+        };
     }
 }
 
@@ -316,7 +354,11 @@ unsafe fn sync_enabled(hwnd: HWND, form: &Form) {
     }
 }
 
-/// ④ を組み立て直す
+/// ④ と ⑤ を組み立て直す
+///
+/// **④ を組み立ててから、それを ⑤ に渡す。** フォームから直接プレビューを
+/// 作ると、ツールの中に「フォームの状態」と「設定の文字列」という 2 つの
+/// 真実が並ぶ。貼る文字列がそのまま検証にもプレビューにも使われる形にする。
 unsafe fn rebuild(hwnd: HWND, app: &App) {
     unsafe {
         let text = app.form.to_config();
@@ -325,6 +367,12 @@ unsafe fn rebuild(hwnd: HWND, app: &App) {
 
         let used = presets::used_placeholders(&app.form.args);
         set_text(hwnd, ID_PLACEHOLDER_HINT, &used.join("　"));
+
+        set_text(
+            hwnd,
+            ID_PREVIEW,
+            &live::describe(&text, &app.try_path, app.count),
+        );
     }
 }
 

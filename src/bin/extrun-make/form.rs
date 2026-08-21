@@ -393,7 +393,6 @@ mod tests {
             r"C:\Program Files (x86)\a&b\x.exe",
             r"C:\dir-1\+new\x.exe",
             r"C:\a^b\x.exe",
-            r"C:\a@b\x.exe",
             r"C:\[1]\x.exe",
         ];
 
@@ -406,6 +405,19 @@ mod tests {
             assert!(!parsed.has_error(), "{}: {}", text, 診断(&parsed));
             assert_eq!(parsed.config.apps[0].path, text);
         }
+    }
+
+    /// パス欄は別名を書く欄なので、`@` はそのまま設定へ流す
+    #[test]
+    fn パスに別名を書ける() {
+        let form = Form {
+            app: r"@sys\tar.exe".to_string(),
+            ..見本()
+        };
+        let 設定 = format!("@sys = C:\\Windows\\System32\r\n{}", form.to_config());
+        let parsed = config::parse(&設定);
+        assert!(!parsed.has_error(), "{}", 診断(&parsed));
+        assert_eq!(parsed.config.apps[0].path, r"C:\Windows\System32\tar.exe");
     }
 
     #[test]

@@ -141,7 +141,12 @@ const LABEL_WAIT: &str = "起動の順番　";
 ///
 /// 引数は 1 つ 1 行にする。空白で連結すると、PowerShell に渡す長い 1 引数と
 /// 複数の引数の区別がつかなくなる（引数の切れ目こそ確かめたいもの）。
-fn write_invocations(
+///
+/// **`extrun-make` のライブプレビューもここを呼ぶ。** 整形を自前で書かせると、
+/// 設定づくりの画面が `--preview` と違うことを言い出す。組み立てを
+/// `resolve_invocations` の 1 か所に集めてあるのと同じ理由で、見せ方も
+/// 1 か所にする。
+pub fn write_invocations(
     item: &MenuItem,
     targets: &[Target],
     ctx: &RunContext,

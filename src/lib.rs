@@ -29,17 +29,20 @@ pub mod preview;
 /// `DLGTEMPLATE` の組み立て。3 列のメイン画面とアイコン選択の画面が使う。
 /// 組み立ての知識を 2 か所に分けないため（`dialog.rs` の冒頭を参照）。
 pub mod dialog;
+/// ライブプレビューが「この対象で表示されるか」を判定するのに使う。
+/// 自前で判定すると「プレビューには出るのにメニューに出ない」が起きる。
+pub mod filter;
+/// ライブプレビューが `RunContext`（実行時に決まる値）を作るのに使う。
+pub mod placeholder;
 /// エスケープを**掛ける**方向（`escape_name` / `escape_path`）を使う。
 /// 自前で書くと `SPECIALS` が 2 実装に分かれる。
 pub mod text;
 
 pub(crate) mod confirm;
 pub(crate) mod datetime;
-pub(crate) mod filter;
 pub(crate) mod icon;
 pub(crate) mod invoke;
 pub(crate) mod launch;
-pub(crate) mod placeholder;
 pub(crate) mod progress;
 pub(crate) mod prompt;
 
