@@ -3,26 +3,14 @@ ExtRun - ファイルやフォルダを素早く適切なアプリケーショ�
 
 コマンドラインから渡されたパスに応じて、extrun-config.txt に書かれたメニューを
 ポップアップ表示し、選択されたコマンドを起動して終了する。
+
+中身は `lib.rs` 側にあり、ここは**コマンドライン引数を読んで呼び分けるだけ**の
+入口。引数の解釈（`take_options` / `take_config_path`）だけがこの実行ファイル
+固有のものなので、ここに残してある。
 */
 
-mod check;
-mod config;
-mod confirm;
-mod console;
-mod datetime;
-mod dialog;
-mod filter;
-mod icon;
-mod invoke;
-mod launch;
-mod menu;
-mod placeholder;
-mod preview;
-mod progress;
-mod prompt;
-mod text;
-
-use config::{Config, MenuPosition};
+use extrun::config::{self, Config, MenuPosition};
+use extrun::{Target, check, console, menu, preview, show_error_dialog};
 use std::env;
 use std::path::PathBuf;
 use windows_sys::Win32::UI::HiDpi::{
@@ -58,31 +46,6 @@ const USAGE: &str = "\
                      （相対パスはカレントディレクトリ基準）
 
 設定ファイルは、既定では extrun.exe と同じフォルダの extrun-config.txt です。";
-
-/// ターゲットファイル/フォルダの情報
-#[derive(Debug, Clone)]
-pub struct Target {
-    /// ファイルタイプ（`folder` / `.txt` のような拡張子 / `file`）
-    pub file_type: String,
-    /// ファイルパス
-    pub path: PathBuf,
-}
-
-impl Target {
-    /// パスからターゲットを作成
-    pub fn from_path(path: PathBuf) -> Self {
-        let file_type = if path.is_dir() {
-            "folder".to_string()
-        } else {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| format!(".{}", ext.to_lowercase()))
-                .unwrap_or_else(|| "file".to_string())
-        };
-
-        Target { file_type, path }
-    }
-}
 
 /// コマンドラインで指定された、設定ファイルへの上書き
 ///
@@ -394,27 +357,6 @@ fn format_errors(parsed: &config::Parsed) -> String {
 
     message.push_str("\n詳しくは extrun.exe --check で確認できます。");
     message
-}
-
-/// エラーダイアログを表示
-pub fn show_error_dialog(title: &str, message: &str) {
-    use std::ffi::OsStr;
-    use std::iter::once;
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr::null_mut;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
-
-    let title_wide: Vec<u16> = OsStr::new(title).encode_wide().chain(once(0)).collect();
-    let message_wide: Vec<u16> = OsStr::new(message).encode_wide().chain(once(0)).collect();
-
-    unsafe {
-        MessageBoxW(
-            null_mut(),
-            message_wide.as_ptr(),
-            title_wide.as_ptr(),
-            MB_OK | MB_ICONWARNING,
-        );
-    }
 }
 
 #[cfg(test)]

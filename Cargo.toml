@@ -50,6 +50,13 @@ codegen-units = 1
 strip = "symbols"
 panic = "abort"
 
+# 設定ファイルを扱う部分をライブラリに切り出してある。2 つ目の実行ファイル
+# （設定ファイルの数行を組み立てる GUI）が、エスケープの規則とコマンドラインの
+# 組み立てを同じ実装のまま呼べるようにするため。詳しくは src/lib.rs の冒頭。
+[lib]
+name = "extrun"
+path = "src/lib.rs"
+
 [[bin]]
 name = "extrun"
 path = "src/main.rs"
