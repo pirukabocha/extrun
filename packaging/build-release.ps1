@@ -12,6 +12,7 @@
 
     zip の中身（extrun-<version>\ の下に入る）:
         extrun.exe
+        extrun-make.exe            設定づくり（無くても設定は手で書ける）
         readme.txt                 packaging\readme.txt（配布専用。README.md とは別物）
         extrun-config.sample.txt   extrun-config.txt をリネームしたもの
         extrun-config-format.md    docs\ から。zip の中ではフラットに並べる
@@ -90,6 +91,8 @@ try {
 
 $exe = Join-Path $Root 'target\release\extrun.exe'
 if (-not (Test-Path -LiteralPath $exe)) { throw "ビルド結果が見つかりません: $exe" }
+$maker = Join-Path $Root 'target\release\extrun-make.exe'
+if (-not (Test-Path -LiteralPath $maker)) { throw "ビルド結果が見つかりません: $maker" }
 
 # --- 配布物の組み立て -------------------------------------------------
 Write-Host '==> 配布物を組み立て' -ForegroundColor Cyan
@@ -103,6 +106,9 @@ foreach ($stale in @($Staging, $ZipPath, "$ZipPath.sha256")) {
 $null = New-Item -ItemType Directory -Path $Payload -Force
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $Payload 'extrun.exe')
+# 設定づくり。extrun.exe と同じフォルダに置く前提で、隣の
+# extrun-config.txt を読む（読むだけで書き戻さない）
+Copy-Item -LiteralPath $maker -Destination (Join-Path $Payload 'extrun-make.exe')
 
 Copy-AsWindowsText (Join-Path $Root 'packaging\readme.txt') `
                    (Join-Path $Payload 'readme.txt') $true

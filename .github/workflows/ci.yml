@@ -50,6 +50,30 @@ jobs:
       - name: リリースビルド
         run: cargo build --release
 
+      # exe ごとにリソースを分けているのが崩れていないか。
+      #
+      # embed_resource::compile はすべての bin にリンクするので、compile_for を
+      # 戻すと extrun-make.exe に extrun.exe の名前が入り、**視覚スタイルの
+      # マニフェストが extrun.exe にも入る**。マニフェストが入ると comctl32 v6 が
+      # 起動時に読み込まれ、「起動速度が最優先」という前提が静かに崩れる。
+      # 見た目では気づけないので、ここで見張る。
+      - name: exe ごとのリソースを確認
+        run: |
+          $expected = @{ 'extrun.exe' = 'extrun.exe'; 'extrun-make.exe' = 'extrun-make.exe' }
+          foreach ($name in $expected.Keys) {
+            $path = "./target/release/$name"
+            $actual = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path).OriginalFilename
+            if ($actual -ne $expected[$name]) {
+              throw "$name の OriginalFilename が $actual になっています（$($expected[$name]) のはず）"
+            }
+            $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($path))
+            $manifest = $text -match 'Microsoft\.Windows\.Common-Controls'
+            $wanted = ($name -eq 'extrun-make.exe')
+            if ($manifest -ne $wanted) {
+              throw "$name のマニフェストが期待と違います（あり=$manifest、期待=$wanted）"
+            }
+          }
+
       - name: 設定ファイルを --check で検証
         # extrun.exe はコンソールを持たないため、pwsh は終了を待たない。
         # 終了コードを見るには Start-Process -Wait -PassThru を使う。

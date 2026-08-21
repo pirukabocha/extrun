@@ -111,6 +111,7 @@ dist/
 zip の中身:
 extrun-<version>/
 ├── extrun.exe
+├── extrun-make.exe            # 設定づくり（無くても設定は手で書ける）
 ├── readme.txt                 # packaging/readme.txt。README.md とは別物
 ├── extrun-config.sample.txt   # extrun-config.txt をリネームしたもの（最小限のサンプル）
 ├── extrun-config-format.md    # docs/ から。zip の中ではフラットに並べる
@@ -122,6 +123,7 @@ extrun-<version>/
 - 設定ファイルを `.sample.txt` にリネームして入れるのは意図的です。`extrun-config.txt` のまま同梱すると、更新版を同じフォルダに展開した人の設定が上書きで消えます
 - `LICENSE` の同梱は MIT の条件（all copies に著作権表示を含める）なので外しません
 - 同梱するファイルを増減するときは、ビルドスクリプトと `packaging/readme.txt` の「同梱ファイル」節の両方を直します
+- **`extrun-make.exe` にだけ視覚スタイルのマニフェストが入ります。** `extrun.exe` に入れると comctl32 v6 が起動時に読み込まれ、起動速度が落ちます。CI がこの分かれ方を見張っています
 
 バージョンを上げるときに手で直すのは **`Cargo.toml` / `packaging/readme.txt` の見出し / `CHANGELOG.md` の 3 か所**です。readme.txt の見出しがずれているとビルドスクリプトが止まります。`Cargo.lock` は `cargo build` が追随するので手作業は不要です。
 

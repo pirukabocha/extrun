@@ -44,12 +44,14 @@ extrun.exe --help              # 使い方
 .\packaging\build-release.ps1   # dist\extrun-<version>-win-x64.zip と .sha256
 ```
 
-テスト → リリースビルド → 組み立て → zip → SHA256 を通しで行う。バージョンは `cargo metadata` 経由で `Cargo.toml` から読むので、スクリプトにハードコードしない。zip の中身は `extrun-<version>/` の下に `extrun.exe` / `readme.txt`（`packaging/readme.txt` 由来。GitHub の `README.md` とは別物）/ `extrun-config.sample.txt`（`extrun-config.txt` をリネーム）/ `extrun-config-format.md` と `extrun-recipes.md`（`docs/` 由来。**zip の中ではフラットに並べる** — 2〜3 個のために展開した人にフォルダを掘らせない。両方が同じ階層に来るので、レシピ集から仕様書への相対リンクは GitHub 上でも zip の中でも通る）/ `CHANGELOG.md` / `LICENSE`。
+テスト → リリースビルド → 組み立て → zip → SHA256 を通しで行う。バージョンは `cargo metadata` 経由で `Cargo.toml` から読むので、スクリプトにハードコードしない。zip の中身は `extrun-<version>/` の下に `extrun.exe` / `extrun-make.exe`（設定づくり。無くても設定は手で書ける） / `readme.txt`（`packaging/readme.txt` 由来。GitHub の `README.md` とは別物）/ `extrun-config.sample.txt`（`extrun-config.txt` をリネーム）/ `extrun-config-format.md` と `extrun-recipes.md`（`docs/` 由来。**zip の中ではフラットに並べる** — 2〜3 個のために展開した人にフォルダを掘らせない。両方が同じ階層に来るので、レシピ集から仕様書への相対リンクは GitHub 上でも zip の中でも通る）/ `CHANGELOG.md` / `LICENSE`。
 
 - **右クリックメニューへの直接登録は勧めない方針**（1.2.0 で決定）。`shell\...\command` に `"%1"` を書く形式は選択されたファイルの数だけプロセスが起動し、`+`（まとめて渡す）が原理的に効かない。さらに `MultiSelectModel` 未指定＝`Document` 扱いのため、**16 個以上選ぶと項目自体がメニューから消える**。1 回の起動で全パスを受け取るには COM の DropTarget / ExecuteCommand ハンドラが要り、常駐しない設計とも `windows-sys` のみという方針とも両立しない。「送る」の SendTo ハンドラはその COM 実装なので制限を受けない。この判断により `.reg` の同梱と `--register` / `--unregister` の実装は取りやめ、`.gitattributes` の `working-tree-encoding` と `build-release.ps1` の `Copy-AsRegFile` も消えた。**「ExtRun はレジストリを書かない」という約束を保てるのもこの判断の効果**なので、右クリック登録を復活させる話が出たらここを読み直すこと。
 - **設定ファイルを `.sample.txt` にリネームして入れるのは意図的**。`extrun-config.txt` のまま同梱すると、更新版を同じフォルダに展開したユーザーの設定が上書きで消える。
 - **`LICENSE` の同梱は MIT の条件**（all copies に著作権表示を含める）なので外さない。
 - 同梱するファイルを増減するときは、ビルドスクリプトと `packaging/readme.txt` の「同梱ファイル」節の両方を直す。
+- **`extrun-make.exe` を同梱しても「exe を消せば完全にアンインストール」は保たれる**（レジストリも書かず、実行中にファイルも作らない）。**「ツールは必須にしない」を配布物の側でも守る** — `readme.txt`・`README.md`・仕様書のいずれにも「無くても設定は手で書けます」と書いてある。ここを落とすと、設定ファイルがツール専用の形式に見えてしまう。
+- **`extrun.exe` に視覚スタイルのマニフェストを入れない**（起動速度）。`compile_for` による exe ごとのリソースの分かれ方は `.github/workflows/ci.yml` が見張っている — 崩れても見た目では気づけないため。
 - バージョンを上げるときに手で直すのは `Cargo.toml` / `packaging/readme.txt` の見出し / `CHANGELOG.md` の 3 か所。readme.txt の見出しがずれているとビルドスクリプトが止まる。`Cargo.lock` は `cargo build` が追随するので手作業は不要。上げたら `.\packaging\build-release.ps1` を通して、zip 名・`--version`・exe の VERSIONINFO まで揃っているか確かめる。
 - **ドキュメントの例示にバージョン番号を書かない。** 版が上がるたびに腐り、更新箇所が増えていく。`extrun-<version>-win-x64.zip` のような書き方にするか、明らかに架空の `v1.2.3` を使う。
 - **開発中はバージョンを上げない。** 変更のたびに `CHANGELOG.md` の `[Unreleased]` へ追記していき、リリースを決めた時点で上の 3 か所を 1 回だけ揃える。`Cargo.toml` の値は VERSIONINFO として exe に埋め込まれ、zip 名と readme.txt の見出し照合にも使われる「配布物の身元」なので、開発中に上げると同じ番号を名乗る未公開バイナリが増えて不具合報告と対応づかなくなる。minor か major かも変更が出揃うまで決まらない。
