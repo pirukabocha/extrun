@@ -51,6 +51,7 @@ extrun/
 │   │   ├── layout.rs       #   画面の寸法（DLGTEMPLATE）
 │   │   ├── live.rs         #   ライブプレビュー（起動されるコマンドライン）
 │   │   ├── iconpick.rs     #   :icon の番号を一覧から選ぶ画面
+│   │   ├── existing.rs     #   今ある設定ファイルを読む（別名・プレビューの前置き）
 │   │   ├── presets.rs      #   対象の種類のひな型
 │   │   └── clip.rs         #   クリップボードとファイル選択
 │   ├── config.rs       # 設定ファイルのパース

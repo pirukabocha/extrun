@@ -829,7 +829,11 @@ fn split_keyword(rest: &str) -> (&str, &str) {
 }
 
 /// `@名前 = 値` なら名前と値を返す
-fn as_alias_def(text: &str) -> Option<(&str, &str)> {
+/// `@名前 = 値` の行なら名前と値を返す
+///
+/// **`extrun-make` の「別名を挿入」もここを呼ぶ。** 別名の定義をどう見分けるかを
+/// 2 か所に書くと、片方だけが `@a b = c` のような書き方を通す事故になる。
+pub fn as_alias_def(text: &str) -> Option<(&str, &str)> {
     let rest = text.strip_prefix('@')?;
     let eq = rest.find('=')?;
     let name = rest[..eq].trim_end();

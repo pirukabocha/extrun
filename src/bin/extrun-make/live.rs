@@ -88,17 +88,31 @@ fn sibling(base: &Path, index: usize) -> PathBuf {
     }
 }
 
-/// ⑤ に出す本文を組み立てる
+/// 「この設定で起動されるもの」に出す本文を組み立てる
 ///
-/// `config` は「作成した設定」そのもの。`--check` と同じ検証を通るので、
+/// `config_text` は「作成した設定」そのもの。`--check` と同じ検証を通るので、
 /// 書式が壊れているあいだは**その理由がここに出る**。
-pub fn describe(config_text: &str, path: &str, count: Count) -> String {
-    let parsed = config::parse(config_text);
+///
+/// `prefix` は今ある設定ファイルの本文。**前に繋げてから解析する**のは、
+/// `[@画像]` や `@sys\tar.exe` のような別名が定義を必要とするため。
+/// 繋げないと「未定義の別名」で止まり、別名を使った設定のプレビューが
+/// 何も出せなくなる。行番号がずれるので、**診断はこのツールが作った行に
+/// 限って出す**。
+pub fn describe(prefix: &str, config_text: &str, path: &str, count: Count) -> String {
+    let offset = prefix.lines().count() as u32;
+    let joined = if prefix.trim().is_empty() {
+        config_text.to_string()
+    } else {
+        format!("{}\r\n{}", prefix.trim_end(), config_text)
+    };
+    let parsed = config::parse(&joined);
 
     if parsed.has_error() {
         let mut out = String::from("設定の書き方に問題があります。\r\n\r\n");
         for diag in parsed.errors() {
-            out.push_str(&format!("{} 行目  {}\r\n", diag.line, diag.message));
+            // 前に繋げたぶんを引いて、作成した設定の中での行番号にする
+            let line = diag.line.saturating_sub(offset).max(1);
+            out.push_str(&format!("{} 行目  {}\r\n", line, diag.message));
         }
         return out;
     }
@@ -158,6 +172,11 @@ mod tests {
     use super::*;
 
     const 見本: &str = "[.png]\r\n\r\n+ ZIP にまとめる | C:\\tar.exe | -c -f $d\\a.zip $p\r\n";
+
+    /// 設定ファイルを読んでいないときの呼び方
+    fn describe(config_text: &str, path: &str, count: Count) -> String {
+        super::describe("", config_text, path, count)
+    }
 
     #[test]
     fn 一つのときは打たれたパスだけ() {
@@ -233,6 +252,39 @@ mod tests {
     #[test]
     fn 対象が空ならそう言う() {
         assert!(describe(見本, "", Count::One).contains("パスを入れてください"));
+    }
+
+    /// 別名は設定ファイルの側にしか定義が無いので、繋げないと解決できない
+    #[test]
+    fn 設定ファイルの別名を解決する() {
+        let 設定 = "[.png]\r\n\r\nX | @sys\\tar.exe | $p\r\n";
+        let 本文 = super::describe(
+            "@sys = C:\\Windows\\System32\r\n",
+            設定,
+            r"C:\photo\a.png",
+            Count::One,
+        );
+        assert!(本文.contains(r"C:\Windows\System32\tar.exe"), "{}", 本文);
+    }
+
+    /// 前に繋げたぶんの行数を引かないと、エラーの行番号が読めない
+    #[test]
+    fn エラーの行番号は作成した設定の中で数える() {
+        let 設定 = "[.png]\r\n\r\nX | C:\\a.exe | $t{zzz}\r\n";
+        let 単体 = super::describe("", 設定, r"C:\a.png", Count::One);
+        let 連結 = super::describe(
+            "@a = b\r\n@c = d\r\n@e = f\r\n",
+            設定,
+            r"C:\a.png",
+            Count::One,
+        );
+        let 行 = |text: &str| {
+            text.lines()
+                .find(|line| line.contains("行目"))
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(行(&単体), 行(&連結), "行番号がずれている");
     }
 
     /// サブメニューを作ったときは、親ではなく中身を見せる

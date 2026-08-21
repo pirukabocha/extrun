@@ -101,6 +101,9 @@ pub const ID_DELAY_MS: u16 = 155;
 pub const ID_DIR: u16 = 156;
 pub const ID_ICON: u16 = 157;
 pub const ID_ICON_PICK: u16 = 159;
+pub const ID_ALIAS: u16 = 160;
+pub const ID_ALIAS_INSERT: u16 = 161;
+pub const ID_EXISTING: u16 = 162;
 pub const ID_WHEN: u16 = 158;
 
 /// 詳細設定を開いたときだけ見せるもの
@@ -118,6 +121,9 @@ pub const DETAIL_IDS: &[u16] = &[
     ID_ICON,
     ID_ICON_PICK,
     ID_WHEN,
+    ID_ALIAS,
+    ID_ALIAS_INSERT,
+    ID_EXISTING,
 ];
 
 /// 詳細設定の中のラベルや枠（ID を持たないものは隠せないので ID を振る）
@@ -827,7 +833,14 @@ fn column3(words: &mut Vec<u16>, top: i16, elastic: Elastic) {
 // ---------------------------------------------------------------------------
 
 fn detail_height() -> i16 {
-    // いちばん高い列（実行のしかた）に合わせる
+    [behaviour_height(), when_height() + 8 + alias_height()]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+}
+
+/// 「実行のしかた」の枠の高さ
+fn behaviour_height() -> i16 {
     12 + CHECK_H
         + 3
         + LABEL_H
@@ -849,7 +862,15 @@ fn detail(words: &mut Vec<u16>, top: i16, decor: &mut u16) {
 
     // --- 実行のしかた ---
     let x = col_x(0);
-    group(words, x, top, COL_W, height, decor, "実行のしかた");
+    group(
+        words,
+        x,
+        top,
+        COL_W,
+        behaviour_height(),
+        decor,
+        "実行のしかた",
+    );
     let mut y = top + 12;
 
     check(
@@ -970,7 +991,7 @@ fn detail(words: &mut Vec<u16>, top: i16, decor: &mut u16) {
 
     // --- 表示の条件 ---
     let x = col_x(2);
-    group(words, x, top, COL_W, height, decor, "表示の条件");
+    group(words, x, top, COL_W, when_height(), decor, "表示の条件");
     let mut y = top + 12;
 
     decor_label(
@@ -1001,6 +1022,72 @@ fn detail(words: &mut Vec<u16>, top: i16, decor: &mut u16) {
         decor,
         "選んだ数で出し分けます",
     );
+
+    // --- 設定ファイルから読んだもの ---
+    let top = top + when_height() + 8;
+    let mut y = top + GROUP_TOP;
+    group(
+        words,
+        col_x(2),
+        top,
+        COL_W,
+        alias_height(),
+        decor,
+        "設定ファイルから読んだもの",
+    );
+
+    decor_label(
+        words,
+        x + 6,
+        &mut y,
+        COL_W - 12,
+        decor,
+        "カーソル位置に別名を挿入",
+    );
+    push_item(
+        words,
+        STYLE_COMBOBOX,
+        x + 6,
+        y,
+        COL_W - 12 - 40,
+        EDIT_H + 12 * 12,
+        ID_ALIAS,
+        ATOM_COMBOBOX,
+        "",
+    );
+    push_item(
+        words,
+        STYLE_BUTTON,
+        x + 6 + COL_W - 12 - 38,
+        y,
+        38,
+        BUTTON_HEIGHT,
+        ID_ALIAS_INSERT,
+        ATOM_BUTTON,
+        "挿入",
+    );
+    y += EDIT_H + 3;
+    push_item(
+        words,
+        STYLE_STATIC,
+        x + 6,
+        y,
+        COL_W - 12,
+        LABEL_H * 2,
+        ID_EXISTING,
+        ATOM_STATIC,
+        "",
+    );
+}
+
+/// 「表示の条件」の枠の高さ
+fn when_height() -> i16 {
+    GROUP_TOP + LABEL_H + TIGHT + EDIT_H + 3 + LABEL_H + GROUP_BOTTOM
+}
+
+/// 「設定ファイルから読んだもの」の枠の高さ
+fn alias_height() -> i16 {
+    GROUP_TOP + LABEL_H + TIGHT + EDIT_H + 3 + LABEL_H * 2 + GROUP_BOTTOM
 }
 
 // ---------------------------------------------------------------------------

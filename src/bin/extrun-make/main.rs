@@ -13,6 +13,7 @@
 */
 
 mod clip;
+mod existing;
 mod form;
 mod iconpick;
 mod layout;
@@ -55,6 +56,29 @@ const LINE_DLU: i16 = 12;
 /// ホイールの 1 ノッチ
 const WHEEL_DELTA: i32 = 120;
 
+/// 「対象の種類」コンボの 1 行が何を指すか
+///
+/// **見出しの行を混ぜるので、位置と中身が 1 対 1 でなくなる。**
+/// `CBS_DROPDOWNLIST` には見出しの仕組みが無いので、選べない行として
+/// 並べておいて、選ばれたら選び直す。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExtKind {
+    /// 自分で指定（拡張子の欄へフォーカスを移す）
+    Custom,
+    /// 灰色の見出し行（選ばせない）
+    Header,
+    /// 設定ファイルの別名
+    Alias(usize),
+    /// 組み込みのひな型
+    Preset(usize),
+}
+
+/// 別名を挿し込める欄
+///
+/// **プレースホルダーを書く欄と、パスを書く欄。** 名前欄に別名を書く意味は
+/// ほとんど無いので入れていない。
+const ALIAS_TARGETS: &[u16] = &[ID_APP, ID_ARGS, ID_EXT, ID_DIR, ID_ICON];
+
 /// 画面が持っている状態
 struct App {
     form: Form,
@@ -74,6 +98,13 @@ struct App {
     virtual_px: i32,
     /// いま何ピクセルぶん送っているか
     scroll: i32,
+    /// 今ある設定ファイルから読んだもの（読むだけ・書き戻さない）
+    existing: existing::Existing,
+    /// 「対象の種類」コンボの行が何を指すか
+    ext_kinds: Vec<ExtKind>,
+    /// 別名を挿し込む先（最後にフォーカスがあった欄）
+    last_edit: u16,
+
     /// スクロールバーが出ていないときのウィンドウの幅
     ///
     /// **クライアント領域の幅で覚えてはいけない。** スクロールバーが出たり
@@ -109,6 +140,9 @@ fn main() {
         updating: false,
         try_path: live::DEFAULT_TARGET.to_string(),
         count: Count::One,
+        existing: existing::Existing::load(),
+        ext_kinds: Vec::new(),
+        last_edit: ID_APP,
         virtual_px: 0,
         scroll: 0,
         base_window_width: 0,
@@ -166,6 +200,10 @@ unsafe extern "system" fn dialog_proc(
                 if matches!(notify, EN_SETFOCUS | BN_SETFOCUS | CBN_SETFOCUS) {
                     ensure_visible(hwnd, app, lparam as HWND);
                 }
+                // 別名を挿し込む先を覚えておく
+                if notify == EN_SETFOCUS && ALIAS_TARGETS.contains(&id) {
+                    app.last_edit = id;
+                }
 
                 command(hwnd, app, id, notify)
             }
@@ -203,7 +241,17 @@ unsafe fn init(hwnd: HWND, app: &mut App) {
         app.updating = true;
 
         // --- コンボの中身 ---
-        combo_fill(hwnd, ID_EXT_KIND, &extension_kinds());
+        let (kinds, labels) = extension_kinds(&app.existing);
+        app.ext_kinds = kinds;
+        combo_fill(hwnd, ID_EXT_KIND, &labels);
+
+        combo_fill(hwnd, ID_ALIAS, &alias_choices(&app.existing));
+        combo_select(hwnd, ID_ALIAS, 0);
+        set_text(hwnd, ID_EXISTING, &app.existing.status());
+        if app.existing.aliases.is_empty() {
+            enable(hwnd, ID_ALIAS, false);
+            enable(hwnd, ID_ALIAS_INSERT, false);
+        }
         combo_fill(
             hwnd,
             ID_PLACE,
@@ -312,19 +360,12 @@ unsafe fn command(hwnd: HWND, app: &mut App, id: u16, notify: u32) -> isize {
             }
 
             ID_EXT_KIND if notify == CBN_SELCHANGE => {
-                let index = combo_selection(hwnd, ID_EXT_KIND);
-                // 0 は「自分で指定」。拡張子の欄へ移って中身を選択状態にする
-                if index == 0 {
-                    let field = GetDlgItem(hwnd, ID_EXT as i32);
-                    SetFocus(field);
-                    SendMessageW(field, EM_SETSEL, 0, -1);
-                } else if let Some(preset) = presets::PRESETS.get(index as usize - 1) {
-                    app.updating = true;
-                    set_text(hwnd, ID_EXT, preset.extensions);
-                    app.updating = false;
-                }
-                read_form(hwnd, app);
-                rebuild(hwnd, app);
+                choose_extension_kind(hwnd, app);
+                return 1;
+            }
+
+            ID_ALIAS_INSERT => {
+                insert_alias(hwnd, app);
                 return 1;
             }
 
@@ -405,8 +446,7 @@ unsafe fn write_form(hwnd: HWND, form: &Form) {
         set_text(hwnd, ID_DELAY_MS, &form.delay_ms);
 
         // ひな型に当てはまれば選んでおく。当てはまらなければ「自分で指定」
-        let kind = presets::find(&form.extensions).map_or(0, |index| index as i32 + 1);
-        combo_select(hwnd, ID_EXT_KIND, kind);
+        combo_select(hwnd, ID_EXT_KIND, 0);
         combo_select(hwnd, ID_PLACE, 0);
         combo_select(hwnd, ID_WHEN, 0);
         check(hwnd, ID_EXT_SECTION, true);
@@ -449,7 +489,7 @@ unsafe fn rebuild(hwnd: HWND, app: &App) {
         set_text(
             hwnd,
             ID_PREVIEW,
-            &live::describe(&text, &app.try_path, app.count),
+            &live::describe(&app.existing.prefix, &text, &app.try_path, app.count),
         );
     }
 }
@@ -824,14 +864,131 @@ unsafe fn insert_placeholder(hwnd: HWND, app: &mut App) {
 
 /// 「対象の種類」に並べるもの
 ///
-/// **並びは「自分で指定 → ひな型」**（書く回数の多い順）。
-/// 設定ファイルから読んだ別名は Phase 5 でこのあいだに入る。
-fn extension_kinds() -> Vec<String> {
-    let mut kinds = vec![presets::CUSTOM.to_string()];
-    for preset in presets::PRESETS {
-        kinds.push(format!("{}   {}", preset.label, preset.extensions));
+/// **並びは「自分で指定 → 設定ファイルの別名 → ひな型」**（書く回数の多い順）。
+/// 別名の層は、該当するものが 1 つも無ければ丸ごと現れない。
+///
+/// **別名は `@` を外さない。** 外すと、ひな型の「画像」と設定ファイルの
+/// `@画像` がどちらも「画像」と表示されて区別できなくなる。
+fn extension_kinds(existing: &existing::Existing) -> (Vec<ExtKind>, Vec<String>) {
+    let mut kinds = vec![ExtKind::Custom];
+    let mut labels = vec![presets::CUSTOM.to_string()];
+
+    let aliases = existing.extension_aliases();
+    if !aliases.is_empty() {
+        kinds.push(ExtKind::Header);
+        labels.push("― 設定ファイルの別名 ―".to_string());
+        for (index, alias) in aliases.iter().enumerate() {
+            kinds.push(ExtKind::Alias(index));
+            labels.push(format!(
+                "@{}   {}",
+                alias.name,
+                existing::head(&alias.value, 28)
+            ));
+        }
     }
-    kinds
+
+    kinds.push(ExtKind::Header);
+    labels.push("― ひな型 ―".to_string());
+    for (index, preset) in presets::PRESETS.iter().enumerate() {
+        kinds.push(ExtKind::Preset(index));
+        labels.push(format!("{}   {}", preset.label, preset.extensions));
+    }
+
+    (kinds, labels)
+}
+
+/// 「対象の種類」で選ばれたものを拡張子の欄へ流す
+unsafe fn choose_extension_kind(hwnd: HWND, app: &mut App) {
+    unsafe {
+        let index = combo_selection(hwnd, ID_EXT_KIND).max(0) as usize;
+        let kind = app.ext_kinds.get(index).copied().unwrap_or(ExtKind::Custom);
+
+        match kind {
+            // 見出しは選ばせない。今の拡張子に合う行へ戻す
+            ExtKind::Header => {
+                let back = current_ext_kind(app);
+                combo_select(hwnd, ID_EXT_KIND, back);
+                return;
+            }
+            // 拡張子の欄へ移って中身を選択状態にする
+            ExtKind::Custom => {
+                let field = GetDlgItem(hwnd, ID_EXT as i32);
+                SetFocus(field);
+                SendMessageW(field, EM_SETSEL, 0, -1);
+            }
+            ExtKind::Alias(alias) => {
+                let name = app.existing.extension_aliases()[alias].name.clone();
+                app.updating = true;
+                set_text(hwnd, ID_EXT, &format!("@{}", name));
+                app.updating = false;
+            }
+            ExtKind::Preset(preset) => {
+                let extensions = presets::PRESETS[preset].extensions;
+                app.updating = true;
+                set_text(hwnd, ID_EXT, extensions);
+                app.updating = false;
+            }
+        }
+
+        read_form(hwnd, app);
+        rebuild(hwnd, app);
+    }
+}
+
+/// いまの拡張子に当てはまるコンボの行（無ければ「自分で指定」）
+fn current_ext_kind(app: &App) -> i32 {
+    let extensions = app.form.extensions.trim();
+
+    let wanted = if let Some(name) = extensions.strip_prefix('@') {
+        app.existing
+            .extension_aliases()
+            .iter()
+            .position(|alias| alias.name == name)
+            .map(ExtKind::Alias)
+    } else {
+        presets::find(extensions).map(ExtKind::Preset)
+    };
+
+    match wanted {
+        Some(kind) => app
+            .ext_kinds
+            .iter()
+            .position(|item| *item == kind)
+            .unwrap_or(0) as i32,
+        None => 0,
+    }
+}
+
+/// 「カーソル位置に別名を挿入」に並べるもの
+///
+/// **先頭の `@` を外して並べる。** `CBS_DROPDOWNLIST` は文字を打つと先頭一致で
+/// その項目へ飛ぶが、全部が `@` で始まるとこの機能が丸ごと死ぬ。
+/// 挿し込まれるのは `@名前` の方。値はパスが多いので**末尾を残して**詰める。
+fn alias_choices(existing: &existing::Existing) -> Vec<String> {
+    existing
+        .aliases
+        .iter()
+        .map(|alias| format!("{}   {}", alias.name, existing::tail(&alias.value, 30)))
+        .collect()
+}
+
+/// 選ばれた別名を、最後に触っていた欄のカーソル位置へ挿し込む
+unsafe fn insert_alias(hwnd: HWND, app: &mut App) {
+    unsafe {
+        let index = combo_selection(hwnd, ID_ALIAS).max(0) as usize;
+        let Some(alias) = app.existing.aliases.get(index) else {
+            return;
+        };
+
+        let target = GetDlgItem(hwnd, app.last_edit as i32);
+        SetFocus(target);
+
+        let wide = to_wide(&format!("@{}", alias.name));
+        SendMessageW(target, EM_REPLACESEL, 1, wide.as_ptr() as LPARAM);
+
+        read_form(hwnd, app);
+        rebuild(hwnd, app);
+    }
 }
 
 /// 「挿入」の一覧に並べるもの
