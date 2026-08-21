@@ -1,6 +1,6 @@
 [package]
 name = "extrun"
-version = "1.8.0"
+version = "1.9.0"
 edition = "2024"
 # edition 2024 を使うので 1.85.0 以上。**数字の理由はこれ 1 本**にしてある
 # （下げるなら edition を戻す話とセットになる）。
