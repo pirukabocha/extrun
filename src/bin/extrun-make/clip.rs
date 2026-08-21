@@ -65,6 +65,15 @@ pub fn pick_executable(hwnd: HWND) -> Option<String> {
     )
 }
 
+/// アイコンの入ったファイルを選ばせる
+pub fn pick_icon_source(hwnd: HWND) -> Option<String> {
+    pick(
+        hwnd,
+        "アイコンの入ったファイルを選ぶ",
+        "アイコンを持つファイル (*.ico;*.exe;*.dll)\0*.ico;*.exe;*.dll\0すべてのファイル\0*.*\0\0",
+    )
+}
+
 /// 試す対象を選ばせる
 ///
 /// **絞り込みを掛けない。** ⑤ は「このファイルを選んだらどうなるか」を見る

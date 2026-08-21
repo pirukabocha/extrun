@@ -32,6 +32,9 @@ pub mod dialog;
 /// ライブプレビューが「この対象で表示されるか」を判定するのに使う。
 /// 自前で判定すると「プレビューには出るのにメニューに出ない」が起きる。
 pub mod filter;
+/// アイコン選択の画面が `extract` を使う。**メニューに出るものと同じ関数**で
+/// 取り出さないと、選んだときに見たものと実際に出るものがずれる。
+pub mod icon;
 /// ライブプレビューが `RunContext`（実行時に決まる値）を作るのに使う。
 pub mod placeholder;
 /// エスケープを**掛ける**方向（`escape_name` / `escape_path`）を使う。
@@ -40,7 +43,6 @@ pub mod text;
 
 pub(crate) mod confirm;
 pub(crate) mod datetime;
-pub(crate) mod icon;
 pub(crate) mod invoke;
 pub(crate) mod launch;
 pub(crate) mod progress;

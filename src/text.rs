@@ -171,7 +171,7 @@ fn escape_with(text: &str, always: &[u8], leading: &[u8]) -> String {
 /// `%NAME%` のまま残し（`--check` の「実行ファイルが見つかりません」に展開前の
 /// 文字列が出るので、そこで気づける）、`%%` は特別扱いしない。名前の大文字小文字
 /// は区別しない（Windows の環境変数の決まりで、`std::env` もそう振る舞う）。
-pub(crate) fn expand_env(text: &str, keep_escapes: bool) -> String {
+pub fn expand_env(text: &str, keep_escapes: bool) -> String {
     if !text.contains('%') {
         return text.to_string();
     }

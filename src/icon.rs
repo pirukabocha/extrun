@@ -59,7 +59,11 @@ pub fn dispose(bitmap: HBITMAP) {
 ///
 /// `ExtractIconExW` は 32x32 と 16x16 しか返さないので、高 DPI では引き伸ばしに
 /// なる。`SHDefExtractIconW` は欲しい大きさを指定できるぶん見栄えがよい。
-fn extract(path: &Path, index: i32, size: i32) -> Option<HICON> {
+///
+/// **`extrun-make` のアイコン選択の画面もここを呼ぶ。** 別の関数で取り出すと、
+/// 選んだときに見たものとメニューに出るものがずれる。返った `HICON` は
+/// 呼び出し側が `DestroyIcon` する。
+pub fn extract(path: &Path, index: i32, size: i32) -> Option<HICON> {
     let wide: Vec<u16> = path
         .as_os_str()
         .encode_wide()

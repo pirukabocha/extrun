@@ -100,6 +100,7 @@ pub const ID_DELAY: u16 = 154;
 pub const ID_DELAY_MS: u16 = 155;
 pub const ID_DIR: u16 = 156;
 pub const ID_ICON: u16 = 157;
+pub const ID_ICON_PICK: u16 = 159;
 pub const ID_WHEN: u16 = 158;
 
 /// 詳細設定を開いたときだけ見せるもの
@@ -115,6 +116,7 @@ pub const DETAIL_IDS: &[u16] = &[
     ID_DELAY_MS,
     ID_DIR,
     ID_ICON,
+    ID_ICON_PICK,
     ID_WHEN,
 ];
 
@@ -954,7 +956,18 @@ fn detail(words: &mut Vec<u16>, top: i16, decor: &mut u16) {
     y += 5;
 
     decor_label(words, x + 6, &mut y, COL_W - 12, decor, "アイコン（:icon）");
-    edit_at(words, x + 6, y, COL_W - 12, ID_ICON);
+    edit_at(words, x + 6, y, COL_W - 12 - 44, ID_ICON);
+    push_item(
+        words,
+        STYLE_BUTTON,
+        x + 6 + COL_W - 12 - 42,
+        y,
+        42,
+        BUTTON_HEIGHT,
+        ID_ICON_PICK,
+        ATOM_BUTTON,
+        "選ぶ…",
+    );
     y += EDIT_H + 3;
     decor_hint(
         words,
@@ -962,7 +975,7 @@ fn detail(words: &mut Vec<u16>, top: i16, decor: &mut u16) {
         &mut y,
         COL_W - 12,
         decor,
-        "パス または パス,番号",
+        "「選ぶ…」で一覧から選べます（番号を数えなくてよい）",
     );
 
     // --- 表示の条件 ---

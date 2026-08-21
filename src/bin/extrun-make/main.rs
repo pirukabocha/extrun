@@ -14,6 +14,7 @@
 
 mod clip;
 mod form;
+mod iconpick;
 mod layout;
 mod live;
 mod metrics;
@@ -213,6 +214,18 @@ unsafe fn command(hwnd: HWND, app: &mut App, id: u16, notify: u32) -> isize {
             ID_APP_BROWSE => {
                 if let Some(path) = clip::pick_executable(hwnd) {
                     set_text(hwnd, ID_APP, &path);
+                    read_form(hwnd, app);
+                    rebuild(hwnd, app);
+                }
+                return 1;
+            }
+
+            ID_ICON_PICK => {
+                // 今の値と「起動するアプリ」を渡す。後者は「よく使う」の
+                // 3 つ目（その exe が持っているアイコンを見たいことが多い）
+                let current = get_text(hwnd, ID_ICON);
+                if let Some(picked) = iconpick::pick(hwnd, &current, &app.form.app) {
+                    set_text(hwnd, ID_ICON, &picked);
                     read_form(hwnd, app);
                     rebuild(hwnd, app);
                 }
