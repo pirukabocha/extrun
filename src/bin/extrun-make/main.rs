@@ -506,20 +506,41 @@ unsafe fn move_to(hwnd: HWND, id: u16, top: i32) {
 }
 
 /// プレースホルダーを引数欄のカーソル位置に挿し込む
+///
+/// 挿したあと、**打ち替えてほしい部分を選択した状態にする**。
+/// `$?{説明}` を挿して「説明」が選ばれていれば、そのまま自分の言葉を打てる。
+/// 挿しっぱなしにすると、中括弧の中を探して手で選び直すことになる。
 unsafe fn insert_placeholder(hwnd: HWND, app: &mut App) {
     unsafe {
         let index = combo_selection(hwnd, ID_INSERT_LIST);
-        let Some((mark, _)) = presets::PLACEHOLDERS.get(index.max(0) as usize) else {
+        let Some((snippet, _, part)) = presets::INSERTS.get(index.max(0) as usize) else {
             return;
         };
 
         let args = GetDlgItem(hwnd, ID_ARGS as i32);
         SetFocus(args);
 
-        // 何も選ばずに押されたときのために、選択範囲を確かめてから置き換える
-        SendMessageW(args, EM_GETSEL, 0, 0);
-        let wide = to_wide(mark);
+        let wide = to_wide(snippet);
         SendMessageW(args, EM_REPLACESEL, 1, wide.as_ptr() as LPARAM);
+
+        // EM_REPLACESEL のあとはカーソルが挿した文字列の直後にいる。
+        // そこから戻って範囲を決める（Win32 の位置は UTF-16 で数える）
+        if !part.is_empty() {
+            if let Some(offset) = snippet.find(part) {
+                let end = SendMessageW(args, EM_GETSEL, 0, 0) as u32 >> 16;
+                let snippet_len = snippet.encode_utf16().count() as u32;
+                let before = snippet[..offset].encode_utf16().count() as u32;
+                let part_len = part.encode_utf16().count() as u32;
+
+                let start = end.saturating_sub(snippet_len) + before;
+                SendMessageW(
+                    args,
+                    EM_SETSEL,
+                    start as WPARAM,
+                    (start + part_len) as LPARAM,
+                );
+            }
+        }
 
         read_form(hwnd, app);
         rebuild(hwnd, app);
@@ -542,10 +563,14 @@ fn extension_kinds() -> Vec<String> {
     kinds
 }
 
+/// 「挿入」の一覧に並べるもの
+///
+/// **そのまま挿して効く形だけ**を `presets::INSERTS` に置いてある
+/// （`$t` や `$?` を単独で並べても、挿した先で何も起きない）。
 fn insert_choices() -> Vec<String> {
-    presets::PLACEHOLDERS
+    presets::INSERTS
         .iter()
-        .map(|(mark, meaning)| format!("{}   {}", mark, meaning))
+        .map(|(snippet, meaning, _)| format!("{}   {}", snippet, meaning))
         .collect()
 }
 

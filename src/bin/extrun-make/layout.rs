@@ -8,12 +8,19 @@
 1 列あたりの幅は 2 段組みのときとほぼ同じ（490 dlu を 2 分割 ≒ 700 dlu を
 3 分割）なので、欄が狭くなってはいない。
 
-    ① どんな項目にするか | ② どのファイルで表示するか | ④ 作成した設定
-                         | ③ メニューのどこに表示するか |
-    ------------------ 詳細設定を開く ▼ ------------------
-    実行のしかた         | 場所と見た目               | 表示の条件
-    ------------------------------------------------------
+    ┌① どんな項目に──┐ ┌② どのファイルで─┐ ┌④ 作成した設定──┐
+    │                  │ └──────────────────┘ │                  │
+    │                  │ ┌③ メニューのどこに┐ │                  │
+    └──────────────────┘ └──────────────────┘ └──────────────────┘
+    ---------------- 詳細設定を開く ▼ ----------------
+    ┌実行のしかた──────┐ ┌場所と見た目──────┐ ┌表示の条件────────┐
+    └──────────────────┘ └──────────────────┘ └──────────────────┘
                                                      閉じる
+
+**①〜④ も詳細設定と同じグループ枠で囲む。** 3 列に分かれていると
+どこからどこまでが 1 つのまとまりなのかが見えないため。枠の見出しが
+段の見出しを兼ねるので、独立した見出しのラベルは置かない（枠を足したぶん
+の高さは、そのラベルを外したぶんでほぼ相殺される）。
 
 詳細設定は**下に伸ばす**。横に 4 列目として開くと幅が 920 dlu になり、
 100% の 1366 幅と 150% の 1920 幅で今度は横が溢れる。
@@ -96,7 +103,14 @@ const COL_GAP: i16 = 9;
 const LABEL_H: i16 = 9;
 const EDIT_H: i16 = 14;
 const CHECK_H: i16 = 10;
-const SEGHEAD_H: i16 = 10;
+/// グループ枠の見出しのぶんの空き（枠の上端から中身の先頭まで）
+const GROUP_TOP: i16 = 12;
+/// グループ枠の内側の左右の余白
+const GROUP_PAD: i16 = 6;
+/// グループ枠の下端の空き
+const GROUP_BOTTOM: i16 = 8;
+/// グループの中身の幅
+const INNER_W: i16 = COL_W - GROUP_PAD * 2;
 /// ラベルと欄のあいだ
 const TIGHT: i16 = 2;
 /// 欄と次のラベルのあいだ
@@ -239,8 +253,7 @@ pub fn build() -> Template {
 const ARGS_H: i16 = 30;
 
 fn column1_height() -> i16 {
-    SEGHEAD_H
-        + 4
+    GROUP_TOP
         + (LABEL_H + TIGHT + EDIT_H + LOOSE) * 3
         + LABEL_H
         + TIGHT
@@ -253,39 +266,50 @@ fn column1_height() -> i16 {
         + CHECK_H
         + 4
         + CHECK_H
+        + 1
+        + LABEL_H
+        + GROUP_BOTTOM
 }
 
 fn column1(words: &mut Vec<u16>) {
-    let x = col_x(0);
-    let mut y = MARGIN;
+    let frame = col_x(0);
+    let x = frame + GROUP_PAD;
+    let mut y = MARGIN + GROUP_TOP;
 
-    seghead(words, x, &mut y, "① どんな項目にするか");
+    frame_box(
+        words,
+        frame,
+        MARGIN,
+        column1_height(),
+        "① どんな項目にするか",
+    );
 
-    label(words, x, &mut y, "メニューに表示する名前");
-    edit(words, x, &mut y, COL_W, ID_NAME);
+    label(words, x, &mut y, INNER_W, "メニューに表示する名前");
+    edit(words, x, &mut y, INNER_W, ID_NAME);
 
-    label(words, x, &mut y, "キーボードで選ぶ文字（省略可）");
+    // 仕様書と同じ呼び名にする（読み比べるときに引っかからないように）
+    label(words, x, &mut y, INNER_W, "アクセスキー（省略可）");
     push_item(words, STYLE_EDIT, x, y, 22, EDIT_H, ID_KEY, ATOM_EDIT, "");
     push_item(
         words,
         STYLE_STATIC,
         x + 28,
         y + 3,
-        COL_W - 28,
+        INNER_W - 28,
         LABEL_H,
         u16::MAX,
         ATOM_STATIC,
-        "半角英数字 1 文字。名前の後ろに (&X) が付きます",
+        "半角英数字 1 文字。メニュー表示中にこのキーで実行できます",
     );
     y += EDIT_H + LOOSE;
 
-    label(words, x, &mut y, "起動するアプリ");
+    label(words, x, &mut y, INNER_W, "起動するアプリ");
     push_item(
         words,
         STYLE_EDIT,
         x,
         y,
-        COL_W - 44,
+        INNER_W - 44,
         EDIT_H,
         ID_APP,
         ATOM_EDIT,
@@ -294,7 +318,7 @@ fn column1(words: &mut Vec<u16>) {
     push_item(
         words,
         STYLE_BUTTON,
-        x + COL_W - 42,
+        x + INNER_W - 42,
         y,
         42,
         BUTTON_HEIGHT,
@@ -304,9 +328,9 @@ fn column1(words: &mut Vec<u16>) {
     );
     y += EDIT_H + LOOSE;
 
-    label(words, x, &mut y, "渡す引数");
+    label(words, x, &mut y, INNER_W, "渡す引数");
     push_item(
-        words, STYLE_WRAP, x, y, COL_W, ARGS_H, ID_ARGS, ATOM_EDIT, "",
+        words, STYLE_WRAP, x, y, INNER_W, ARGS_H, ID_ARGS, ATOM_EDIT, "",
     );
     y += ARGS_H + 3;
 
@@ -318,7 +342,7 @@ fn column1(words: &mut Vec<u16>) {
         STYLE_COMBOBOX,
         x,
         y,
-        COL_W - 40,
+        INNER_W - 40,
         EDIT_H + 12 * 11,
         ID_INSERT_LIST,
         ATOM_COMBOBOX,
@@ -327,7 +351,7 @@ fn column1(words: &mut Vec<u16>) {
     push_item(
         words,
         STYLE_BUTTON,
-        x + COL_W - 38,
+        x + INNER_W - 38,
         y,
         38,
         BUTTON_HEIGHT,
@@ -343,7 +367,7 @@ fn column1(words: &mut Vec<u16>) {
         STYLE_STATIC,
         x,
         y,
-        COL_W,
+        INNER_W,
         LABEL_H,
         ID_PLACEHOLDER_HINT,
         ATOM_STATIC,
@@ -351,32 +375,30 @@ fn column1(words: &mut Vec<u16>) {
     );
     y += LABEL_H + 5;
 
-    check(
-        words,
-        x,
-        &mut y,
-        COL_W,
-        ID_NO_ARGS,
-        "引数を渡さない（欄を空にする）",
-    );
+    // 「欄を空にする」は設定ファイルの話で、画面の入力欄と取り違えられる。
+    // 仕様書の言い方（引数なしで起動する）に合わせる
+    check(words, x, &mut y, INNER_W, ID_NO_ARGS, "引数なしで起動する");
     y += 4;
+    // 「1 回でまとめて渡す」だけでは何を渡すのかが読めないので、パスと
+    // プロセスを名指しする（仕様書の「すべてまとめて 1 プロセスに渡す」に揃える）
     check(
         words,
         x,
         &mut y,
-        COL_W,
+        INNER_W,
         ID_ALL_MODE,
-        "複数選んだら 1 回でまとめて渡す（+）",
+        "すべてのパスを 1 プロセスにまとめて渡す（+）",
     );
+    y += 1;
+    hint(words, x, &mut y, INNER_W, "複数選んだときだけ効きます");
 }
 
 // ---------------------------------------------------------------------------
 // ② どのファイルで表示するか / ③ メニューのどこに表示するか
 // ---------------------------------------------------------------------------
 
-fn column2_height() -> i16 {
-    SEGHEAD_H
-        + 4
+fn group2a_height() -> i16 {
+    GROUP_TOP
         + LABEL_H
         + TIGHT
         + EDIT_H
@@ -392,9 +414,11 @@ fn column2_height() -> i16 {
         + CHECK_H
         + 1
         + CHECK_H
-        + 6
-        + SEGHEAD_H
-        + 4
+        + GROUP_BOTTOM
+}
+
+fn group2b_height() -> i16 {
+    GROUP_TOP
         + LABEL_H
         + TIGHT
         + EDIT_H
@@ -404,21 +428,33 @@ fn column2_height() -> i16 {
         + EDIT_H
         + LOOSE
         + CHECK_H
+        + GROUP_BOTTOM
+}
+
+fn column2_height() -> i16 {
+    group2a_height() + 8 + group2b_height()
 }
 
 fn column2(words: &mut Vec<u16>) {
-    let x = col_x(1);
-    let mut y = MARGIN;
+    let frame = col_x(1);
+    let x = frame + GROUP_PAD;
+    let mut y = MARGIN + GROUP_TOP;
 
-    seghead(words, x, &mut y, "② どのファイルで表示するか");
+    frame_box(
+        words,
+        frame,
+        MARGIN,
+        group2a_height(),
+        "② どのファイルで表示するか",
+    );
 
-    label(words, x, &mut y, "対象の種類");
+    label(words, x, &mut y, INNER_W, "対象の種類");
     push_item(
         words,
         STYLE_COMBOBOX,
         x,
         y,
-        COL_W,
+        INNER_W,
         EDIT_H + 12 * 9,
         ID_EXT_KIND,
         ATOM_COMBOBOX,
@@ -426,25 +462,25 @@ fn column2(words: &mut Vec<u16>) {
     );
     y += EDIT_H + LOOSE;
 
-    label(words, x, &mut y, "拡張子");
-    edit_at(words, x, y, COL_W, ID_EXT);
+    label(words, x, &mut y, INNER_W, "拡張子");
+    edit_at(words, x, y, INNER_W, ID_EXT);
     y += EDIT_H + 3;
     hint(
         words,
         x,
         &mut y,
-        COL_W,
+        INNER_W,
         "直に書き替えると、種類は「自分で指定」に変わります",
     );
-    y += LOOSE - 3;
+    y += LOOSE;
 
-    label(words, x, &mut y, "拡張子の書き方");
+    label(words, x, &mut y, INNER_W, "拡張子の書き方");
     push_item(
         words,
         STYLE_RADIO_FIRST,
         x,
         y,
-        COL_W,
+        INNER_W,
         CHECK_H,
         ID_EXT_SECTION,
         ATOM_BUTTON,
@@ -456,23 +492,32 @@ fn column2(words: &mut Vec<u16>) {
         STYLE_RADIO,
         x,
         y,
-        COL_W,
+        INNER_W,
         CHECK_H,
         ID_EXT_PERITEM,
         ATOM_BUTTON,
         "項目の行に書く（名前 [.png .jpg] | …）",
     );
-    y += CHECK_H + 6;
 
-    seghead(words, x, &mut y, "③ メニューのどこに表示するか");
+    // --- ③ ---
+    let top = MARGIN + group2a_height() + 8;
+    let mut y = top + GROUP_TOP;
 
-    label(words, x, &mut y, "置き場所");
+    frame_box(
+        words,
+        frame,
+        top,
+        group2b_height(),
+        "③ メニューのどこに表示するか",
+    );
+
+    label(words, x, &mut y, INNER_W, "置き場所");
     push_item(
         words,
         STYLE_COMBOBOX,
         x,
         y,
-        COL_W,
+        INNER_W,
         EDIT_H + 12 * 3,
         ID_PLACE,
         ATOM_COMBOBOX,
@@ -480,13 +525,19 @@ fn column2(words: &mut Vec<u16>) {
     );
     y += EDIT_H + LOOSE;
 
-    label(words, x, &mut y, "サブメニューの名前とキー");
+    label(
+        words,
+        x,
+        &mut y,
+        INNER_W,
+        "サブメニューの名前とアクセスキー",
+    );
     push_item(
         words,
         STYLE_EDIT,
         x,
         y,
-        COL_W - 26,
+        INNER_W - 26,
         EDIT_H,
         ID_SUB_NAME,
         ATOM_EDIT,
@@ -495,7 +546,7 @@ fn column2(words: &mut Vec<u16>) {
     push_item(
         words,
         STYLE_EDIT,
-        x + COL_W - 22,
+        x + INNER_W - 22,
         y,
         22,
         EDIT_H,
@@ -509,7 +560,7 @@ fn column2(words: &mut Vec<u16>) {
         words,
         x,
         &mut y,
-        COL_W,
+        INNER_W,
         ID_SEPARATOR,
         "この項目の前に区切り線を入れる（---）",
     );
@@ -519,23 +570,30 @@ fn column2(words: &mut Vec<u16>) {
 // ④ 作成した設定
 // ---------------------------------------------------------------------------
 
-const OUTPUT_H: i16 = 150;
+/// 出力欄の高さ
+///
+/// **いちばん高い列に合わせて決めてある。** 3 列の下端が揃っていないと、
+/// 枠を付けたときに不揃いがそのまま見える。伸縮してよい唯一の欄でもある
+/// （画面に収まらないときはここだけを縮める）。
+const OUTPUT_H: i16 = 175;
 
 fn column3_height() -> i16 {
-    SEGHEAD_H + TIGHT + LABEL_H + 3 + OUTPUT_H + 5 + BUTTON_HEIGHT
+    GROUP_TOP + LABEL_H + 3 + OUTPUT_H + 5 + BUTTON_HEIGHT + GROUP_BOTTOM
 }
 
 fn column3(words: &mut Vec<u16>) {
-    let x = col_x(2);
-    let mut y = MARGIN;
+    let frame = col_x(2);
+    let x = frame + GROUP_PAD;
+    let mut y = MARGIN + GROUP_TOP;
 
-    seghead(words, x, &mut y, "④ 作成した設定");
+    frame_box(words, frame, MARGIN, column3_height(), "④ 作成した設定");
+
     push_item(
         words,
         STYLE_STATIC,
         x,
         y,
-        COL_W,
+        INNER_W,
         LABEL_H,
         ID_PASTE_HINT,
         ATOM_STATIC,
@@ -548,7 +606,7 @@ fn column3(words: &mut Vec<u16>) {
         STYLE_OUTPUT,
         x,
         y,
-        COL_W,
+        INNER_W,
         OUTPUT_H,
         ID_OUTPUT,
         ATOM_EDIT,
@@ -561,7 +619,7 @@ fn column3(words: &mut Vec<u16>) {
         STYLE_BUTTON,
         x,
         y,
-        70,
+        90,
         BUTTON_HEIGHT,
         ID_COPY,
         ATOM_BUTTON,
@@ -743,28 +801,28 @@ fn detail(words: &mut Vec<u16>, top: i16, decor: &mut u16) {
 // 小さな部品
 // ---------------------------------------------------------------------------
 
-fn seghead(words: &mut Vec<u16>, x: i16, y: &mut i16, text: &str) {
+/// 常に見えているグループ枠（詳細設定のものと違って隠さないので ID は要らない）
+fn frame_box(words: &mut Vec<u16>, x: i16, y: i16, height: i16, text: &str) {
     push_item(
         words,
-        STYLE_STATIC,
+        STYLE_GROUP,
         x,
-        *y,
+        y,
         COL_W,
-        SEGHEAD_H,
+        height,
         u16::MAX,
-        ATOM_STATIC,
+        ATOM_BUTTON,
         text,
     );
-    *y += SEGHEAD_H + 4;
 }
 
-fn label(words: &mut Vec<u16>, x: i16, y: &mut i16, text: &str) {
+fn label(words: &mut Vec<u16>, x: i16, y: &mut i16, width: i16, text: &str) {
     push_item(
         words,
         STYLE_STATIC,
         x,
         *y,
-        COL_W,
+        width,
         LABEL_H,
         u16::MAX,
         ATOM_STATIC,
