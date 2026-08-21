@@ -479,6 +479,51 @@ unsafe fn resize(hwnd: HWND, client_height: i32) {
             wanted,
             SWP_NOMOVE | SWP_NOZORDER,
         );
+
+        keep_title_bar_reachable(hwnd);
+    }
+}
+
+/// タイトルバーが画面の上に隠れないようにする
+///
+/// **画面に収まりきらない環境がある。** 3 列の高さと詳細設定の帯は縮められない
+/// ので、伸縮する 2 つの欄を下限まで削っても、1920×1080 の 150% のような
+/// 組み合わせでは開いた状態がはみ出す。
+///
+/// `DS_CENTER` は画面の中央に置くので、そのままだとタイトルバーが上端より
+/// 外に出て**マウスで動かせなくなる**。下にはみ出すぶんには、Esc で閉じられるし
+/// 詳細設定を畳めば戻る。上に出さないことだけを守る。
+unsafe fn keep_title_bar_reachable(hwnd: HWND) {
+    unsafe {
+        let mut window = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        GetWindowRect(hwnd, &mut window);
+
+        let mut work = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work as *mut RECT as *mut _, 0) == 0 {
+            return;
+        }
+
+        if window.top < work.top {
+            SetWindowPos(
+                hwnd,
+                null_mut(),
+                window.left,
+                work.top,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER,
+            );
+        }
     }
 }
 

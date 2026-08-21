@@ -8,19 +8,41 @@
 1 列あたりの幅は 2 段組みのときとほぼ同じ（490 dlu を 2 分割 ≒ 700 dlu を
 3 分割）なので、欄が狭くなってはいない。
 
-    ┌① どんな項目に──┐ ┌② どのファイルで─┐ ┌④ 作成した設定──┐
-    │                  │ └──────────────────┘ └──────────────────┘
-    │                  │ ┌③ メニューのどこに┐ ┌⑤ 起動されるもの─┐
+    ┌ 作成した設定 ─────────────────────────────────────┐
+    │ 末尾に貼り付ければ…            [クリップボードにコピー] │
+    │ [.png .jpg]                                            │
+    │ + ZIP にまとめる (&Z) | %SystemRoot%\...\tar.exe        │
+    └────────────────────────────────────────────────────────┘
+    ┌① どんな項目に──┐ ┌② どのファイルで─┐ ┌ 起動されるもの ─┐
+    │                  │ └──────────────────┘ │                  │
+    │                  │ ┌③ メニューのどこに┐ │                  │
     └──────────────────┘ └──────────────────┘ └──────────────────┘
     ---------------- 詳細設定を開く ▼ ----------------
     ┌実行のしかた──────┐ ┌場所と見た目──────┐ ┌表示の条件────────┐
     └──────────────────┘ └──────────────────┘ └──────────────────┘
                                                      閉じる
 
-**①〜④ も詳細設定と同じグループ枠で囲む。** 3 列に分かれていると
-どこからどこまでが 1 つのまとまりなのかが見えないため。枠の見出しが
-段の見出しを兼ねるので、独立した見出しのラベルは置かない（枠を足したぶん
-の高さは、そのラベルを外したぶんでほぼ相殺される）。
+**すべてグループ枠で囲む。** 3 列に分かれていると、どこからどこまでが
+1 つのまとまりなのかが見えないため。枠の見出しが段の見出しを兼ねるので、
+独立した見出しのラベルは置かない。
+
+**番号は入力する 3 つだけに付ける。** 結果の 2 枚（作成した設定・起動される
+もの）は題名で足りるし、番号を振ると「① 作成した設定」のように最初にやる
+ことではないものが先頭に来てしまう。
+
+**「作成した設定」は上部に横断させる。** 理由は 2 つある。
+
+- **中身が横に長い。** `+ ZIP にまとめる (&Z) | %SystemRoot%\System32\tar.exe
+  | -a -c -f $d\images.zip $p` のような行は、列の幅（210 dlu）では折り返して
+  読めない。逆に「起動されるもの」は 1 行が短くて行数が多いので、縦に長い
+  列の方が合う
+- **開閉で位置が動かない。** 下部に置くと、詳細設定を開いたときに
+  **いちばん目で追う欄が跳ねる**（下に置いてなお動かさないためには、
+  詳細設定より上に置くことになり、今度は「入力 → 結果 → また入力」という
+  並びになる）
+
+**列の高さは揃える。** 「起動されるもの」の高さは他の列に合わせて決めるので
+（`preview_ideal`）、下に死んだ空白ができない。
 
 詳細設定は**下に伸ばす**。横に 4 列目として開くと幅が 920 dlu になり、
 100% の 1366 幅と 150% の 1920 幅で今度は横が溢れる。
@@ -164,20 +186,29 @@ pub struct Elastic {
 }
 
 impl Elastic {
-    /// ゆとりのある画面での大きさ
-    pub const IDEAL: Elastic = Elastic {
-        output: 100,
-        preview: 140,
-    };
+    /// 「作成した設定」のゆとりのある高さ（6 行ぶんほど）
+    const OUTPUT_IDEAL: i16 = 60;
     /// これ以上は縮めない（3 行ぶん）
     const FLOOR: i16 = 24;
 
+    /// ゆとりのある画面での大きさ
+    ///
+    /// **プレビューの高さは他の列に合わせて決まる。** 決め打ちにすると、
+    /// 列の下に死んだ空白ができるか、逆に 1 列だけ飛び出す。
+    pub fn ideal() -> Elastic {
+        Elastic {
+            output: Elastic::OUTPUT_IDEAL,
+            preview: preview_ideal(),
+        }
+    }
+
     /// 使える高さに合わせて縮める
     ///
-    /// **④ から先に縮める。** ④ は貼るためのもので全部を読む必要がないが、
-    /// ⑤ は読むためのものなので、削るなら ④ が先。
+    /// **「作成した設定」から先に縮める。** あちらは貼るためのもので全部を
+    /// 読む必要がないが、「起動されるもの」は読むためのものなので、
+    /// 削るなら作成した設定が先。
     pub fn fit(available: i16) -> Elastic {
-        let mut elastic = Elastic::IDEAL;
+        let mut elastic = Elastic::ideal();
         let mut over = expanded_height_for(elastic) - available;
 
         if over > 0 {
@@ -202,18 +233,32 @@ pub struct Template {
     pub expanded_height: i16,
 }
 
+/// 3 列がいちばん高いところ
+fn columns_height(elastic: Elastic) -> i16 {
+    [column1_height(), column2_height(), column3_height(elastic)]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+}
+
+/// 3 列の上端（「作成した設定」の帯の下）
+fn columns_top(elastic: Elastic) -> i16 {
+    MARGIN + band_height(elastic) + 8
+}
+
 /// 詰めものを除いた本体の下端
 fn body_bottom(elastic: Elastic) -> i16 {
-    MARGIN
-        + [column1_height(), column2_height(), column3_height(elastic)]
-            .into_iter()
-            .max()
-            .unwrap_or(0)
+    columns_top(elastic) + columns_height(elastic)
+}
+
+/// 詳細設定を畳んだときのダイアログの高さ
+fn folded_height_for(elastic: Elastic) -> i16 {
+    body_bottom(elastic) + 8 + BUTTON_HEIGHT + 8 + BUTTON_HEIGHT + MARGIN
 }
 
 /// 詳細設定を開いたときのダイアログの高さ
 fn expanded_height_for(elastic: Elastic) -> i16 {
-    body_bottom(elastic) + 8 + BUTTON_HEIGHT + 8 + detail_height() + 8 + BUTTON_HEIGHT + MARGIN
+    folded_height_for(elastic) + detail_height() + 8
 }
 
 /// メイン画面のテンプレートを組み立てる
@@ -242,9 +287,11 @@ pub fn build(elastic: Elastic) -> Template {
         "設定づくり ― ExtRun",
     );
 
-    column1(&mut words);
-    column2(&mut words);
-    column3(&mut words, elastic);
+    band(&mut words, elastic);
+    let top = columns_top(elastic);
+    column1(&mut words, top);
+    column2(&mut words, top);
+    column3(&mut words, top, elastic);
 
     // --- 折りたたみ ---
     push_item(
@@ -329,18 +376,12 @@ fn column1_height() -> i16 {
         + GROUP_BOTTOM
 }
 
-fn column1(words: &mut Vec<u16>) {
+fn column1(words: &mut Vec<u16>, top: i16) {
     let frame = col_x(0);
     let x = frame + GROUP_PAD;
-    let mut y = MARGIN + GROUP_TOP;
+    let mut y = top + GROUP_TOP;
 
-    frame_box(
-        words,
-        frame,
-        MARGIN,
-        column1_height(),
-        "① どんな項目にするか",
-    );
+    frame_box(words, frame, top, column1_height(), "① どんな項目にするか");
 
     label(words, x, &mut y, INNER_W, "メニューに表示する名前");
     edit(words, x, &mut y, INNER_W, ID_NAME);
@@ -493,15 +534,15 @@ fn column2_height() -> i16 {
     group2a_height() + 8 + group2b_height()
 }
 
-fn column2(words: &mut Vec<u16>) {
+fn column2(words: &mut Vec<u16>, top: i16) {
     let frame = col_x(1);
     let x = frame + GROUP_PAD;
-    let mut y = MARGIN + GROUP_TOP;
+    let mut y = top + GROUP_TOP;
 
     frame_box(
         words,
         frame,
-        MARGIN,
+        top,
         group2a_height(),
         "② どのファイルで表示するか",
     );
@@ -558,13 +599,13 @@ fn column2(words: &mut Vec<u16>) {
     );
 
     // --- ③ ---
-    let top = MARGIN + group2a_height() + 8;
-    let mut y = top + GROUP_TOP;
+    let third = top + group2a_height() + 8;
+    let mut y = third + GROUP_TOP;
 
     frame_box(
         words,
         frame,
-        top,
+        third,
         group2b_height(),
         "③ メニューのどこに表示するか",
     );
@@ -625,74 +666,50 @@ fn column2(words: &mut Vec<u16>) {
 }
 
 // ---------------------------------------------------------------------------
-// ④ 作成した設定 / ⑤ この設定で起動されるもの
+// 作成した設定（上部に横断する帯）
 // ---------------------------------------------------------------------------
 
-fn group4_height(elastic: Elastic) -> i16 {
-    GROUP_TOP + LABEL_H + 3 + elastic.output + 5 + BUTTON_HEIGHT + GROUP_BOTTOM
+/// 帯の幅（ウィンドウいっぱい）
+const BAND_W: i16 = DIALOG_WIDTH - MARGIN * 2;
+const BAND_INNER: i16 = BAND_W - GROUP_PAD * 2;
+
+fn band_height(elastic: Elastic) -> i16 {
+    GROUP_TOP + BUTTON_HEIGHT + 3 + elastic.output + GROUP_BOTTOM
 }
 
-fn group5_height(elastic: Elastic) -> i16 {
-    GROUP_TOP
-        + LABEL_H
-        + TIGHT
-        + EDIT_H
-        + LOOSE
-        + LABEL_H
-        + TIGHT
-        + CHECK_H
-        + 4
-        + elastic.preview
-        + GROUP_BOTTOM
-}
-
-fn column3_height(elastic: Elastic) -> i16 {
-    group4_height(elastic) + 8 + group5_height(elastic)
-}
-
-fn column3(words: &mut Vec<u16>, elastic: Elastic) {
-    let frame = col_x(2);
+/// 貼り先の案内とコピーのボタンを 1 行に並べ、その下に全幅の欄を置く
+///
+/// **案内とボタンを同じ行にする**のは、どちらも「この文字列をどうするか」の
+/// 話で、行を分けるとそのぶん欄が低くなるため。
+fn band(words: &mut Vec<u16>, elastic: Elastic) {
+    let frame = col_x(0);
     let x = frame + GROUP_PAD;
     let mut y = MARGIN + GROUP_TOP;
 
-    frame_box(
+    frame_box_wide(
         words,
         frame,
         MARGIN,
-        group4_height(elastic),
-        "④ 作成した設定",
+        BAND_W,
+        band_height(elastic),
+        "作成した設定",
     );
 
     push_item(
         words,
         STYLE_STATIC,
         x,
-        y,
-        INNER_W,
+        y + 3,
+        BAND_INNER - 100,
         LABEL_H,
         ID_PASTE_HINT,
         ATOM_STATIC,
         "",
     );
-    y += LABEL_H + 3;
-
-    push_item(
-        words,
-        STYLE_OUTPUT,
-        x,
-        y,
-        INNER_W,
-        elastic.output,
-        ID_OUTPUT,
-        ATOM_EDIT,
-        "",
-    );
-    y += elastic.output + 5;
-
     push_item(
         words,
         STYLE_BUTTON,
-        x,
+        x + BAND_INNER - 90,
         y,
         90,
         BUTTON_HEIGHT,
@@ -700,17 +717,52 @@ fn column3(words: &mut Vec<u16>, elastic: Elastic) {
         ATOM_BUTTON,
         "クリップボードにコピー",
     );
+    y += BUTTON_HEIGHT + 3;
 
-    // --- ⑤ ---
-    let top = MARGIN + group4_height(elastic) + 8;
+    push_item(
+        words,
+        STYLE_OUTPUT,
+        x,
+        y,
+        BAND_INNER,
+        elastic.output,
+        ID_OUTPUT,
+        ATOM_EDIT,
+        "",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// この設定で起動されるもの（3 列目）
+// ---------------------------------------------------------------------------
+
+/// プレビューの欄を除いた、3 列目の決まった高さ
+const PREVIEW_FIXED: i16 =
+    GROUP_TOP + LABEL_H + TIGHT + EDIT_H + LOOSE + LABEL_H + TIGHT + CHECK_H + 4 + GROUP_BOTTOM;
+
+/// 他の列に高さを合わせたときのプレビューの欄の大きさ
+///
+/// **列の下に死んだ空白を作らない**ためのもの。決め打ちにすると、
+/// ①② の下が空くか、3 列目だけが飛び出す。
+fn preview_ideal() -> i16 {
+    (column1_height().max(column2_height()) - PREVIEW_FIXED).max(Elastic::FLOOR)
+}
+
+fn column3_height(elastic: Elastic) -> i16 {
+    PREVIEW_FIXED + elastic.preview
+}
+
+fn column3(words: &mut Vec<u16>, top: i16, elastic: Elastic) {
+    let frame = col_x(2);
+    let x = frame + GROUP_PAD;
     let mut y = top + GROUP_TOP;
 
     frame_box(
         words,
         frame,
         top,
-        group5_height(elastic),
-        "⑤ この設定で起動されるもの",
+        column3_height(elastic),
+        "この設定で起動されるもの",
     );
 
     label(words, x, &mut y, INNER_W, "試す対象");
@@ -954,12 +1006,16 @@ fn detail(words: &mut Vec<u16>, top: i16, decor: &mut u16) {
 
 /// 常に見えているグループ枠（詳細設定のものと違って隠さないので ID は要らない）
 fn frame_box(words: &mut Vec<u16>, x: i16, y: i16, height: i16, text: &str) {
+    frame_box_wide(words, x, y, COL_W, height, text);
+}
+
+fn frame_box_wide(words: &mut Vec<u16>, x: i16, y: i16, width: i16, height: i16, text: &str) {
     push_item(
         words,
         STYLE_GROUP,
         x,
         y,
-        COL_W,
+        width,
         height,
         u16::MAX,
         ATOM_BUTTON,
@@ -1099,27 +1155,27 @@ mod tests {
     /// ゆとりがあるときは削らない
     #[test]
     fn 収まるなら理想の大きさのまま() {
-        let 大きい画面 = expanded_height_for(Elastic::IDEAL) + 100;
+        let 大きい画面 = expanded_height_for(Elastic::ideal()) + 100;
         let elastic = Elastic::fit(大きい画面);
-        assert_eq!(elastic.output, Elastic::IDEAL.output);
-        assert_eq!(elastic.preview, Elastic::IDEAL.preview);
+        assert_eq!(elastic.output, Elastic::ideal().output);
+        assert_eq!(elastic.preview, Elastic::ideal().preview);
     }
 
     /// ④ は貼るためのもので全部を読む必要が無いので、削るならこちらが先
     #[test]
     fn 足りなければ作成した設定から削る() {
-        let elastic = Elastic::fit(expanded_height_for(Elastic::IDEAL) - 20);
-        assert_eq!(elastic.output, Elastic::IDEAL.output - 20);
-        assert_eq!(elastic.preview, Elastic::IDEAL.preview);
+        let elastic = Elastic::fit(expanded_height_for(Elastic::ideal()) - 20);
+        assert_eq!(elastic.output, Elastic::ideal().output - 20);
+        assert_eq!(elastic.preview, Elastic::ideal().preview);
     }
 
     /// ④ を下限まで削ってなお足りなければ ⑤ にも手を付ける
     #[test]
     fn それでも足りなければプレビューも削る() {
-        let 削る = (Elastic::IDEAL.output - Elastic::FLOOR) + 30;
-        let elastic = Elastic::fit(expanded_height_for(Elastic::IDEAL) - 削る);
+        let 削る = (Elastic::ideal().output - Elastic::FLOOR) + 30;
+        let elastic = Elastic::fit(expanded_height_for(Elastic::ideal()) - 削る);
         assert_eq!(elastic.output, Elastic::FLOOR);
-        assert_eq!(elastic.preview, Elastic::IDEAL.preview - 30);
+        assert_eq!(elastic.preview, Elastic::ideal().preview - 30);
     }
 
     /// 極端に狭い画面でも 3 行ぶんは残す（潰すと何も読めなくなる）
@@ -1130,16 +1186,41 @@ mod tests {
         assert_eq!(elastic.preview, Elastic::FLOOR);
     }
 
-    /// 1920x1080 の 150%（作業領域から出る上限がおよそ 425 dlu）でも収まる
+    /// 1920x1080 の 150%（作業領域から出る上限がおよそ 425 dlu）
+    ///
+    /// **畳んだ状態は必ず収まる。** 開いた状態は下の試験のとおり収まらない
+    /// ことがあるが、畳めば戻れる。
     #[test]
-    fn 手狭な環境でも画面に収まる() {
+    fn 手狭な環境でも畳んだ状態は収まる() {
         let 上限 = 425;
         let elastic = Elastic::fit(上限);
         assert!(
-            expanded_height_for(elastic) <= 上限,
+            folded_height_for(elastic) <= 上限,
             "{} > {}",
-            expanded_height_for(elastic),
+            folded_height_for(elastic),
             上限
         );
+    }
+
+    /// **開いた状態には縮めきれない下限がある。**
+    ///
+    /// 3 列の高さ（フォームの行そのもの）と詳細設定の帯は縮められないので、
+    /// 伸縮する 2 つの欄を下限まで削ってもこれ以上は小さくならない。
+    /// 1920×1080 の 150% のように「その画面にしては拡大率が大きい」組み合わせ
+    /// では、開いた状態が画面からはみ出す。
+    ///
+    /// **はみ出しても操作できなくならない**ことが大事で、`fold` が
+    /// タイトルバーを作業領域の中に留める。閉じるのは Esc でもできるし、
+    /// 詳細設定を畳めば元の大きさに戻る。
+    #[test]
+    fn 開いた状態には縮めきれない下限がある() {
+        let 下限 = Elastic::fit(0);
+        assert_eq!(下限.output, Elastic::FLOOR);
+        assert_eq!(下限.preview, Elastic::FLOOR);
+
+        // 下限まで削っても、3 列と詳細設定のぶんは残る
+        assert!(expanded_height_for(下限) > 425);
+        // ただし畳んだ状態はどんな画面でも収まる大きさ
+        assert!(folded_height_for(下限) < 425);
     }
 }
