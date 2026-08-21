@@ -203,27 +203,6 @@ impl Elastic {
             preview: preview_ideal(),
         }
     }
-
-    /// 使える高さに合わせて縮める
-    ///
-    /// **「作成した設定」から先に縮める。** あちらは貼るためのもので全部を
-    /// 読む必要がないが、「起動されるもの」は読むためのものなので、
-    /// 削るなら作成した設定が先。
-    pub fn fit(available: i16) -> Elastic {
-        let mut elastic = Elastic::ideal();
-        let mut over = expanded_height_for(elastic) - available;
-
-        if over > 0 {
-            let cut = over.min(elastic.output - Elastic::FLOOR);
-            elastic.output -= cut;
-            over -= cut;
-        }
-        if over > 0 {
-            let cut = over.min(elastic.preview - Elastic::FLOOR);
-            elastic.preview -= cut;
-        }
-        elastic
-    }
 }
 
 /// 組み立てたテンプレートと、切り替えに要る高さ
@@ -263,8 +242,17 @@ fn expanded_height_for(elastic: Elastic) -> i16 {
     folded_height_for(elastic) + detail_height() + 8
 }
 
+/// 中身が画面に入りきらないときにスクロールで見せる
+///
+/// **入りきるところまで欄を縮める、という作りをやめた代わり。** フォームの行
+/// そのものは縮められないので下限があり、1920×1080 の 150% のような
+/// 組み合わせでは結局はみ出していた。項目を足すたびに高さの上限とぶつかるのも
+/// ここで終わる。
+const STYLE_SCROLL: u32 = WS_VSCROLL;
+
 /// メイン画面のテンプレートを組み立てる
-pub fn build(elastic: Elastic) -> Template {
+pub fn build() -> Template {
+    let elastic = Elastic::ideal();
     let mut words: Vec<u16> = Vec::new();
     let mut decor = DETAIL_DECOR_FIRST;
 
@@ -273,19 +261,21 @@ pub fn build(elastic: Elastic) -> Template {
     let fold_y = body_bottom + 8;
     let detail_y = fold_y + BUTTON_HEIGHT + 8;
     let detail_height = detail_height();
-    let folded_footer = detail_y;
     let expanded_footer = detail_y + detail_height + 8;
 
-    let folded_height = folded_footer + BUTTON_HEIGHT + MARGIN;
-    let expanded_height = expanded_footer + BUTTON_HEIGHT + MARGIN;
+    // 高さの計算は 1 か所（テストもここを見る）
+    let folded_height = folded_height_for(elastic);
+    let expanded_height = expanded_height_for(elastic);
 
     // アプリの本体になるので、タスクバーに出て最小化もできる必要がある
     push_header_with(
         &mut words,
-        WS_MINIMIZEBOX,
+        WS_MINIMIZEBOX | STYLE_SCROLL,
         WS_EX_APPWINDOW,
         DIALOG_WIDTH,
-        expanded_height,
+        // **作られたときの姿は畳んだ状態。** 開いたぶんは下にはみ出すが、
+        // そこはスクロールで見せる
+        folded_height,
         "設定づくり ― ExtRun",
     );
 
@@ -1165,75 +1155,30 @@ fn group(
 mod tests {
     use super::*;
 
-    /// ゆとりがあるときは削らない
+    /// 「起動されるもの」の高さは他の列に合わせて決まる（列の下に空白を作らない）
     #[test]
-    fn 収まるなら理想の大きさのまま() {
-        let 大きい画面 = expanded_height_for(Elastic::ideal()) + 100;
-        let elastic = Elastic::fit(大きい画面);
-        assert_eq!(elastic.output, Elastic::ideal().output);
-        assert_eq!(elastic.preview, Elastic::ideal().preview);
-    }
-
-    /// ④ は貼るためのもので全部を読む必要が無いので、削るならこちらが先
-    #[test]
-    fn 足りなければ作成した設定から削る() {
-        let elastic = Elastic::fit(expanded_height_for(Elastic::ideal()) - 20);
-        assert_eq!(elastic.output, Elastic::ideal().output - 20);
-        assert_eq!(elastic.preview, Elastic::ideal().preview);
-    }
-
-    /// ④ を下限まで削ってなお足りなければ ⑤ にも手を付ける
-    #[test]
-    fn それでも足りなければプレビューも削る() {
-        let 削る = (Elastic::ideal().output - Elastic::FLOOR) + 30;
-        let elastic = Elastic::fit(expanded_height_for(Elastic::ideal()) - 削る);
-        assert_eq!(elastic.output, Elastic::FLOOR);
-        assert_eq!(elastic.preview, Elastic::ideal().preview - 30);
-    }
-
-    /// 極端に狭い画面でも 3 行ぶんは残す（潰すと何も読めなくなる）
-    #[test]
-    fn 下限より小さくはしない() {
-        let elastic = Elastic::fit(0);
-        assert_eq!(elastic.output, Elastic::FLOOR);
-        assert_eq!(elastic.preview, Elastic::FLOOR);
-    }
-
-    /// 1920x1080 の 150%（作業領域から出る上限がおよそ 425 dlu）
-    ///
-    /// **畳んだ状態は必ず収まる。** 開いた状態は下の試験のとおり収まらない
-    /// ことがあるが、畳めば戻れる。
-    #[test]
-    fn 手狭な環境でも畳んだ状態は収まる() {
-        let 上限 = 425;
-        let elastic = Elastic::fit(上限);
+    fn 三列の高さが揃う() {
+        let elastic = Elastic::ideal();
+        assert_eq!(
+            column3_height(elastic),
+            column2_height(),
+            "② と起動されるものの高さが揃っていない"
+        );
         assert!(
-            folded_height_for(elastic) <= 上限,
-            "{} > {}",
-            folded_height_for(elastic),
-            上限
+            (column2_height() - column1_height()).abs() < 10,
+            "① と ② の高さが離れすぎ: {} と {}",
+            column1_height(),
+            column2_height()
         );
     }
 
-    /// **開いた状態には縮めきれない下限がある。**
-    ///
-    /// 3 列の高さ（フォームの行そのもの）と詳細設定の帯は縮められないので、
-    /// 伸縮する 2 つの欄を下限まで削ってもこれ以上は小さくならない。
-    /// 1920×1080 の 150% のように「その画面にしては拡大率が大きい」組み合わせ
-    /// では、開いた状態が画面からはみ出す。
-    ///
-    /// **はみ出しても操作できなくならない**ことが大事で、`fold` が
-    /// タイトルバーを作業領域の中に留める。閉じるのは Esc でもできるし、
-    /// 詳細設定を畳めば元の大きさに戻る。
+    /// 開いた状態は畳んだ状態より詳細設定のぶんだけ高い
     #[test]
-    fn 開いた状態には縮めきれない下限がある() {
-        let 下限 = Elastic::fit(0);
-        assert_eq!(下限.output, Elastic::FLOOR);
-        assert_eq!(下限.preview, Elastic::FLOOR);
-
-        // 下限まで削っても、3 列と詳細設定のぶんは残る
-        assert!(expanded_height_for(下限) > 425);
-        // ただし畳んだ状態はどんな画面でも収まる大きさ
-        assert!(folded_height_for(下限) < 425);
+    fn 開くと詳細設定のぶんだけ伸びる() {
+        let elastic = Elastic::ideal();
+        assert_eq!(
+            expanded_height_for(elastic) - folded_height_for(elastic),
+            detail_height() + 8
+        );
     }
 }

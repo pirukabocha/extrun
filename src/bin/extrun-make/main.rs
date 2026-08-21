@@ -17,20 +17,23 @@ mod form;
 mod iconpick;
 mod layout;
 mod live;
-mod metrics;
 mod presets;
 
 use std::ptr::null_mut;
 
 use extrun::dialog::{show_modal, to_wide};
 use form::{ExtStyle, Form, Placement, WhenKind};
-use layout::Elastic;
 use layout::*;
 use live::Count;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+// SetScrollInfo だけが Controls 側にある（SCROLLINFO と GetScrollInfo は
+// WindowsAndMessaging）。`Win32_UI_Controls_Dialogs` が親を引き込むので
+// フィーチャーは増えない
+use windows_sys::Win32::UI::Controls::SetScrollInfo;
 use windows_sys::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, GetSystemMetricsForDpi,
+    SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -43,6 +46,15 @@ const EM_SETSEL: u32 = 0x00B1;
 const BM_GETCHECK: u32 = 0x00F0;
 const BM_SETCHECK: u32 = 0x00F1;
 
+/// `layout.rs` と揃えておく寸法（ダイアログ単位）
+const MARGIN_DLU: i16 = 8;
+const BUTTON_DLU: i16 = 14;
+/// スクロールバーの矢印 1 回ぶん
+const LINE_DLU: i16 = 12;
+
+/// ホイールの 1 ノッチ
+const WHEEL_DELTA: i32 = 120;
+
 /// 画面が持っている状態
 struct App {
     form: Form,
@@ -53,26 +65,41 @@ struct App {
     expanded_height: i16,
     /// 組み立て直しを止める（値を流し込んでいる最中に鳴る通知を無視する）
     updating: bool,
-    /// ⑤ で試す対象のパスと、何個選んだことにするか
+    /// 「この設定で起動されるもの」で試す対象のパスと、何個選んだことにするか
     try_path: String,
     count: Count,
+
+    // --- スクロール ---
+    /// 中身の高さ（ピクセル）。詳細設定の開閉で変わる
+    virtual_px: i32,
+    /// いま何ピクセルぶん送っているか
+    scroll: i32,
+    /// スクロールバーが出ていないときのウィンドウの幅
+    ///
+    /// **クライアント領域の幅で覚えてはいけない。** スクロールバーが出たり
+    /// 消えたりするたびにクライアント幅が変わるので、そこから逆算すると
+    /// 開閉のたびにウィンドウが痩せていく（実際に 1418 → 1397 になった）。
+    base_window_width: i32,
+}
+
+impl App {
+    /// いまの中身の高さ（ダイアログ単位）
+    fn virtual_dlu(&self) -> i16 {
+        if self.expanded {
+            self.expanded_height
+        } else {
+            self.folded_height
+        }
+    }
 }
 
 fn main() {
     // ウィンドウを作る前に宣言する（`extrun` 本体と同じ理由）
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
 
-    // **画面に収まる範囲でいちばん大きく取る。** ウィンドウを作る前に測るので、
-    // テンプレートは 1 回で正しい形になり、あとから縮めて周りを動かさずに済む
-    let available = metrics::available_height_dlu(
-        (DS_MODALFRAME | DS_SETFONT | DS_CENTER) as u32
-            | WS_POPUP
-            | WS_CAPTION
-            | WS_SYSMENU
-            | WS_MINIMIZEBOX,
-        WS_EX_APPWINDOW,
-    );
-    let template = layout::build(Elastic::fit(available));
+    // **画面に収まるかは考えずに組み立てる。** 入りきらないぶんはスクロールで
+    // 見せるので、欄を縮める必要が無い
+    let template = layout::build();
 
     let mut app = App {
         form: Form::default(),
@@ -82,6 +109,9 @@ fn main() {
         updating: false,
         try_path: live::DEFAULT_TARGET.to_string(),
         count: Count::One,
+        virtual_px: 0,
+        scroll: 0,
+        base_window_width: 0,
     };
 
     let result = show_modal(
@@ -131,7 +161,35 @@ unsafe extern "system" fn dialog_proc(
 
                 let id = (wparam & 0xFFFF) as u16;
                 let notify = ((wparam >> 16) & 0xFFFF) as u32;
+
+                // Tab で送ったフォーカスが画面の外に出ないよう追いかける
+                if matches!(notify, EN_SETFOCUS | BN_SETFOCUS | CBN_SETFOCUS) {
+                    ensure_visible(hwnd, app, lparam as HWND);
+                }
+
                 command(hwnd, app, id, notify)
+            }
+
+            WM_VSCROLL => {
+                let app = app_of(hwnd);
+                if app.is_null() {
+                    return 0;
+                }
+                on_vscroll(hwnd, &mut *app, (wparam & 0xFFFF) as u32);
+                0
+            }
+
+            WM_MOUSEWHEEL => {
+                let app = app_of(hwnd);
+                if app.is_null() {
+                    return 0;
+                }
+                let app = &mut *app;
+                // 上へ回すと正の値。3 行ぶん送るのが Windows の作法
+                let notches = ((wparam >> 16) as i16) as i32;
+                let step = dlu_y(hwnd, LINE_DLU) * 3;
+                scroll_to(hwnd, app, app.scroll - notches * step / WHEEL_DELTA);
+                0
             }
 
             _ => 0,
@@ -170,6 +228,13 @@ unsafe fn init(hwnd: HWND, app: &mut App) {
         set_text(hwnd, ID_TRY_PATH, &app.try_path);
         check(hwnd, ID_COUNT_ONE, true);
         app.updating = false;
+
+        // 作られたときのウィンドウの幅を控えておく。スクロールバーが要る
+        // ときはこれに幅を足す（内側に食い込ませると、いちばん右のグループ枠の
+        // 縁が削れる）
+        let mut window = zero_rect();
+        GetWindowRect(hwnd, &mut window);
+        app.base_window_width = window.right - window.left;
 
         // 詳細設定は畳んだ状態から始める
         fold(hwnd, app, false);
@@ -392,10 +457,14 @@ unsafe fn rebuild(hwnd: HWND, app: &App) {
 /// 詳細設定を開く / 閉じる
 ///
 /// **コントロールは動かさない。** 最初から下端に置いてあるものを見せ隠しして、
-/// ダイアログの高さだけを付け替える。位置を計算し直すと、開閉のたびに
-/// レイアウトがずれる余地ができる。
+/// 中身の高さ（`virtual_px`）を付け替えるだけ。位置が変わるのは下の帯の
+/// 2 つ（説明と「閉じる」）だけで、これは開閉で置き場所そのものが変わるため。
 unsafe fn fold(hwnd: HWND, app: &mut App, expanded: bool) {
     unsafe {
+        // 動かす前にいちばん上へ戻す。スクロールしたままだと、下の帯を
+        // 置き直すときの座標がずれる
+        scroll_to(hwnd, app, 0);
+
         app.expanded = expanded;
         let show = if expanded { SW_SHOW } else { SW_HIDE };
 
@@ -416,12 +485,18 @@ unsafe fn fold(hwnd: HWND, app: &mut App, expanded: bool) {
             },
         );
 
-        // 下の帯は開閉に合わせて動かす（この 2 つだけは位置が変わる）
-        let dlu = if expanded {
-            app.expanded_height
-        } else {
-            app.folded_height
-        };
+        let dlu = app.virtual_dlu();
+        move_footer(hwnd, dlu_y(hwnd, dlu - MARGIN_DLU - BUTTON_DLU));
+        apply_layout(hwnd, app);
+    }
+}
+
+/// ダイアログ単位を縦のピクセルに直す
+///
+/// ウィンドウができたあとなら `MapDialogRect` が使える（作る前は使えないので、
+/// テンプレートの寸法はダイアログ単位のまま組み立てている）。
+unsafe fn dlu_y(hwnd: HWND, dlu: i16) -> i32 {
+    unsafe {
         let mut rect = RECT {
             left: 0,
             top: 0,
@@ -429,109 +504,203 @@ unsafe fn fold(hwnd: HWND, app: &mut App, expanded: bool) {
             bottom: dlu as i32,
         };
         MapDialogRect(hwnd, &mut rect);
-        resize(hwnd, rect.bottom);
-
-        let footer_dlu = dlu - 8 - 14;
-        let mut footer = RECT {
-            left: 0,
-            top: 0,
-            right: 4,
-            bottom: footer_dlu as i32,
-        };
-        MapDialogRect(hwnd, &mut footer);
-        move_footer(hwnd, footer.bottom);
+        rect.bottom
     }
 }
 
-/// クライアント領域の高さを付け替える
+/// ウィンドウの大きさとスクロールの範囲を、いまの中身に合わせる
 ///
-/// **画面からはみ出すなら、はみ出したぶんだけ ④ の欄を低くする。**
-/// 1920×1080 の 150% のように「その画面にしては拡大率が大きい」組み合わせでは、
-/// 開いた状態が作業領域を 60〜80 px 超える。伸縮してよいのは ④ だけで、
-/// フォームの行は縮めない（読めなくなる）。
-unsafe fn resize(hwnd: HWND, client_height: i32) {
+/// **中身が画面に入りきらないときはスクロールで見せる。** かつては入りきる
+/// ところまで欄を縮めていたが、フォームの行そのものは縮められないので
+/// 下限があり、1920×1080 の 150% のような組み合わせでは結局はみ出していた。
+/// スクロールにしたことで、その下限と「タイトルバーを画面内に留める」細工の
+/// 両方が要らなくなった。
+///
+/// **スクロールバーが出るぶんだけウィンドウを広げる。** 内側に食い込ませると、
+/// いちばん右のグループ枠の縁が削れる。
+unsafe fn apply_layout(hwnd: HWND, app: &mut App) {
     unsafe {
-        let mut window = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
+        app.virtual_px = dlu_y(hwnd, app.virtual_dlu());
+
+        let (mut window, mut client) = (zero_rect(), zero_rect());
         GetWindowRect(hwnd, &mut window);
-        let mut client = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
         GetClientRect(hwnd, &mut client);
 
-        let chrome = (window.bottom - window.top) - client.bottom;
-        let mut wanted = client_height + chrome;
+        let chrome_y = (window.bottom - window.top) - client.bottom;
 
-        let mut work = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
+        let work = work_area();
+        let max_client = (work.bottom - work.top - chrome_y).max(1);
+        let client_height = app.virtual_px.min(max_client);
+
+        let scrolls = app.virtual_px > client_height;
+        let bar = if scrolls {
+            GetSystemMetricsForDpi(SM_CXVSCROLL, GetDpiForWindow(hwnd).max(96))
+        } else {
+            0
         };
-        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work as *mut RECT as *mut _, 0) != 0 {
-            let available = work.bottom - work.top;
-            if wanted > available {
-                shrink_output(hwnd, wanted - available);
-                wanted = available;
-            }
-        }
 
         SetWindowPos(
             hwnd,
             null_mut(),
             0,
             0,
-            window.right - window.left,
-            wanted,
+            app.base_window_width + bar,
+            client_height + chrome_y,
             SWP_NOMOVE | SWP_NOZORDER,
         );
 
-        keep_title_bar_reachable(hwnd);
+        keep_inside_work_area(hwnd);
+        set_scroll_range(hwnd, app, client_height);
     }
 }
 
-/// タイトルバーが画面の上に隠れないようにする
-///
-/// **画面に収まりきらない環境がある。** 3 列の高さと詳細設定の帯は縮められない
-/// ので、伸縮する 2 つの欄を下限まで削っても、1920×1080 の 150% のような
-/// 組み合わせでは開いた状態がはみ出す。
-///
-/// `DS_CENTER` は画面の中央に置くので、そのままだとタイトルバーが上端より
-/// 外に出て**マウスで動かせなくなる**。下にはみ出すぶんには、Esc で閉じられるし
-/// 詳細設定を畳めば戻る。上に出さないことだけを守る。
-unsafe fn keep_title_bar_reachable(hwnd: HWND) {
+unsafe fn set_scroll_range(hwnd: HWND, app: &mut App, page: i32) {
     unsafe {
-        let mut window = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        GetWindowRect(hwnd, &mut window);
+        app.scroll = app.scroll.clamp(0, (app.virtual_px - page).max(0));
 
-        let mut work = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
+        let info = SCROLLINFO {
+            cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+            nMin: 0,
+            nMax: (app.virtual_px - 1).max(0),
+            nPage: page.max(0) as u32,
+            nPos: app.scroll,
+            nTrackPos: 0,
         };
-        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work as *mut RECT as *mut _, 0) == 0 {
+        SetScrollInfo(hwnd, SB_VERT, &info, 1);
+    }
+}
+
+/// いまの位置から `y` まで中身を送る
+///
+/// **`SW_SCROLLCHILDREN` で子ウィンドウごと動かす。** コントロールはすべて
+/// ダイアログの子なので、この 1 回で全部まとめて動く。
+unsafe fn scroll_to(hwnd: HWND, app: &mut App, y: i32) {
+    unsafe {
+        let mut client = zero_rect();
+        GetClientRect(hwnd, &mut client);
+
+        let y = y.clamp(0, (app.virtual_px - client.bottom).max(0));
+        let delta = app.scroll - y;
+        if delta == 0 {
+            return;
+        }
+        app.scroll = y;
+
+        ScrollWindowEx(
+            hwnd,
+            0,
+            delta,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            SW_SCROLLCHILDREN | SW_INVALIDATE | SW_ERASE,
+        );
+
+        let info = SCROLLINFO {
+            cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_POS,
+            nMin: 0,
+            nMax: 0,
+            nPage: 0,
+            nPos: app.scroll,
+            nTrackPos: 0,
+        };
+        SetScrollInfo(hwnd, SB_VERT, &info, 1);
+    }
+}
+
+/// スクロールバーの操作
+unsafe fn on_vscroll(hwnd: HWND, app: &mut App, code: u32) {
+    unsafe {
+        let mut client = zero_rect();
+        GetClientRect(hwnd, &mut client);
+        let page = client.bottom;
+        let line = dlu_y(hwnd, LINE_DLU);
+
+        let target = match code {
+            _ if code == SB_LINEUP as u32 => app.scroll - line,
+            _ if code == SB_LINEDOWN as u32 => app.scroll + line,
+            _ if code == SB_PAGEUP as u32 => app.scroll - page,
+            _ if code == SB_PAGEDOWN as u32 => app.scroll + page,
+            _ if code == SB_TOP as u32 => 0,
+            _ if code == SB_BOTTOM as u32 => app.virtual_px,
+            _ if code == SB_THUMBTRACK as u32 || code == SB_THUMBPOSITION as u32 => {
+                // つまみは 16 ビットに収まらないことがあるので、位置は
+                // SCROLLINFO から取る（wParam の上位ワードでは足りない）
+                let mut info = SCROLLINFO {
+                    cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+                    fMask: SIF_TRACKPOS,
+                    nMin: 0,
+                    nMax: 0,
+                    nPage: 0,
+                    nPos: 0,
+                    nTrackPos: 0,
+                };
+                GetScrollInfo(hwnd, SB_VERT, &mut info);
+                info.nTrackPos
+            }
+            _ => return,
+        };
+
+        scroll_to(hwnd, app, target);
+    }
+}
+
+/// フォーカスが移った先が画面の外なら、見えるところまで送る
+///
+/// **これが無いと Tab で送ったフォーカスが画面の外に消える。** スクロールする
+/// 画面では Windows が面倒を見てくれないので、自分で追いかける。
+unsafe fn ensure_visible(hwnd: HWND, app: &mut App, control: HWND) {
+    unsafe {
+        if control.is_null() {
             return;
         }
 
-        if window.top < work.top {
+        let (mut rect, mut client) = (zero_rect(), zero_rect());
+        GetWindowRect(control, &mut rect);
+        GetClientRect(hwnd, &mut client);
+
+        let mut corner = [rect.left, rect.top];
+        ScreenToClient(hwnd, corner.as_mut_ptr() as *mut _);
+        let top = corner[1];
+        let bottom = top + (rect.bottom - rect.top);
+
+        let margin = dlu_y(hwnd, MARGIN_DLU);
+        if top < margin {
+            scroll_to(hwnd, app, app.scroll + top - margin);
+        } else if bottom > client.bottom - margin {
+            scroll_to(hwnd, app, app.scroll + bottom - client.bottom + margin);
+        }
+    }
+}
+
+/// ウィンドウ全体を作業領域の中に収める
+///
+/// `DS_CENTER` は画面の中央に置くので、作業領域（タスクバーを除いた範囲）から
+/// はみ出すことがある。高さは作業領域より大きくならないようにしてあるので、
+/// 位置を寄せれば必ず全体が入る。
+unsafe fn keep_inside_work_area(hwnd: HWND) {
+    unsafe {
+        let mut window = zero_rect();
+        GetWindowRect(hwnd, &mut window);
+        let work = work_area();
+
+        let mut top = window.top;
+        if window.bottom > work.bottom {
+            top -= window.bottom - work.bottom;
+        }
+        if top < work.top {
+            top = work.top;
+        }
+
+        if top != window.top {
             SetWindowPos(
                 hwnd,
                 null_mut(),
                 window.left,
-                work.top,
+                top,
                 0,
                 0,
                 SWP_NOSIZE | SWP_NOZORDER,
@@ -540,36 +709,37 @@ unsafe fn keep_title_bar_reachable(hwnd: HWND) {
     }
 }
 
-/// ④ の欄を低くする（下限は 3 行ぶん）
-unsafe fn shrink_output(hwnd: HWND, by: i32) {
+fn zero_rect() -> RECT {
+    RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    }
+}
+
+/// タスクバーを除いた画面の範囲（取れなければ画面全体に倒す）
+///
+/// **デバッグビルドでは `EXTRUN_MAKE_WORK_HEIGHT` で高さを狭められる。**
+/// スクロールが要る環境は「その画面にしては拡大率が大きい」組み合わせなので、
+/// 開発機では再現しにくい。画面の解像度を変えずに確かめるための逃がしで、
+/// リリースビルドには残らない。
+unsafe fn work_area() -> RECT {
     unsafe {
-        let output = GetDlgItem(hwnd, ID_OUTPUT as i32);
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        GetWindowRect(output, &mut rect);
+        let mut work = zero_rect();
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work as *mut RECT as *mut _, 0) == 0 {
+            work.right = GetSystemMetrics(SM_CXSCREEN);
+            work.bottom = GetSystemMetrics(SM_CYSCREEN);
+        }
 
-        let mut line = RECT {
-            left: 0,
-            top: 0,
-            right: 4,
-            bottom: 24,
-        };
-        MapDialogRect(hwnd, &mut line);
+        #[cfg(debug_assertions)]
+        if let Ok(height) = std::env::var("EXTRUN_MAKE_WORK_HEIGHT") {
+            if let Ok(height) = height.parse::<i32>() {
+                work.bottom = work.top + height;
+            }
+        }
 
-        let height = (rect.bottom - rect.top - by).max(line.bottom);
-        SetWindowPos(
-            output,
-            null_mut(),
-            0,
-            0,
-            rect.right - rect.left,
-            height,
-            SWP_NOMOVE | SWP_NOZORDER,
-        );
+        work
     }
 }
 
@@ -579,7 +749,7 @@ unsafe fn shrink_output(hwnd: HWND, by: i32) {
 unsafe fn move_footer(hwnd: HWND, top: i32) {
     unsafe {
         // 説明は文字の高さぶん下げて、ボタンと中心を揃える
-        move_to(hwnd, ID_FOOTER_NOTE, top + 3);
+        move_to(hwnd, ID_FOOTER_NOTE, top + dlu_y(hwnd, 3));
         move_to(hwnd, IDCANCEL as u16, top);
     }
 }
@@ -588,12 +758,7 @@ unsafe fn move_footer(hwnd: HWND, top: i32) {
 unsafe fn move_to(hwnd: HWND, id: u16, top: i32) {
     unsafe {
         let control = GetDlgItem(hwnd, id as i32);
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
+        let mut rect = zero_rect();
         GetWindowRect(control, &mut rect);
 
         let mut point = [rect.left, rect.top];

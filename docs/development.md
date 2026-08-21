@@ -51,7 +51,6 @@ extrun/
 │   │   ├── layout.rs       #   画面の寸法（DLGTEMPLATE）
 │   │   ├── live.rs         #   ライブプレビュー（起動されるコマンドライン）
 │   │   ├── iconpick.rs     #   :icon の番号を一覧から選ぶ画面
-│   │   ├── metrics.rs      #   ダイアログ単位の実寸（画面に収まる高さを決める）
 │   │   ├── presets.rs      #   対象の種類のひな型
 │   │   └── clip.rs         #   クリップボードとファイル選択
 │   ├── config.rs       # 設定ファイルのパース
