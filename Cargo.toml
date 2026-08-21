@@ -41,6 +41,10 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_Input_KeyboardAndMouse",
+    # extrun-make の「参照…」で GetOpenFileNameW を使うため。
+    # 長いパスを手で打たずに済むことが「コマンドラインに明るくない」への
+    # 答えの半分なので、ここは払う。extrun 本体は使わない
+    "Win32_UI_Controls_Dialogs",
 ] }
 
 [profile.release]
@@ -60,6 +64,12 @@ path = "src/lib.rs"
 [[bin]]
 name = "extrun"
 path = "src/main.rs"
+
+# 設定ファイルの数行を組み立てる GUI。ExtRun 本体とは独立していて、
+# これが無くても設定は手で書ける（配布 zip には同梱する）。
+[[bin]]
+name = "extrun-make"
+path = "src/bin/extrun-make/main.rs"
 
 # exe に VERSIONINFO を埋め込むためだけのビルド時依存。
 # 実行時の依存は windows-sys のみで、バイナリサイズにも影響しない。

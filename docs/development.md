@@ -45,6 +45,12 @@ extrun/
 ├── src/
 │   ├── main.rs         # エントリポイント、引数処理、DPI 宣言
 │   ├── lib.rs          # 中身の入口（モジュール宣言、Target、エラーダイアログ）
+│   ├── bin/extrun-make/    # 設定づくり（2 つ目の実行ファイル）
+│   │   ├── main.rs         #   ダイアログ手続き、フォームの読み書き
+│   │   ├── form.rs         #   設定ファイルの数行を組み立てる（テストの本体）
+│   │   ├── layout.rs       #   画面の寸法（DLGTEMPLATE）
+│   │   ├── presets.rs      #   対象の種類のひな型
+│   │   └── clip.rs         #   クリップボードとファイル選択
 │   ├── config.rs       # 設定ファイルのパース
 │   ├── text.rs         # エスケープ・区切り・%NAME% の展開（パーサと実行時で共用）
 │   ├── menu.rs         # Win32 メニューの構築・表示・実行
@@ -140,6 +146,7 @@ extrun-<version>/
 ```powershell
 cargo test              # 通常のテスト（ライブラリ / バイナリ / doctest）
 cargo test --lib        # ライブラリだけ（大半のテストはここ）
+cargo test --bin extrun-make  # 設定づくりの組み立てだけ
 cargo test -- --ignored --test-threads=1  # 実機でしか確かめられないもの（ダイアログの表示と :wait の逐次起動）
 ```
 

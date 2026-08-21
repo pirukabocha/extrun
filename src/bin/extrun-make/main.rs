@@ -1,0 +1,622 @@
+/*!
+設定づくり ― ExtRun
+
+設定ファイルの数行を組み立てて渡すだけの道具。**編集はしない。**
+フォームに入力すると設定が組み上がり、テキスト欄に出て、クリップボードに入る。
+既存の設定ファイルには書き戻さない（コメントや整形を壊さないため）。
+
+**ExtRun 本体とは独立している。** これが無くても設定は手で書ける、という
+関係を保つ。ツールで作れない項目は手で書けばよい。
+
+組み立ての中身は `form.rs` にあり、ここは `Form` を読み書きする入れ物。
+画面の寸法は `layout.rs`。
+*/
+
+mod clip;
+mod form;
+mod layout;
+mod presets;
+
+use std::ptr::null_mut;
+
+use extrun::dialog::{show_modal, to_wide};
+use form::{ExtStyle, Form, Placement, WhenKind};
+use layout::*;
+use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+/// 入力欄の中身を差し替えるメッセージ（`windows-sys` が出さない）
+const EM_GETSEL: u32 = 0x00B0;
+const EM_REPLACESEL: u32 = 0x00C2;
+const EM_SETSEL: u32 = 0x00B1;
+
+const BM_GETCHECK: u32 = 0x00F0;
+const BM_SETCHECK: u32 = 0x00F1;
+
+/// 画面が持っている状態
+struct App {
+    form: Form,
+    /// 詳細設定を開いているか
+    expanded: bool,
+    /// 畳んだとき / 開いたときのダイアログの高さ（ダイアログ単位）
+    folded_height: i16,
+    expanded_height: i16,
+    /// 組み立て直しを止める（値を流し込んでいる最中に鳴る通知を無視する）
+    updating: bool,
+}
+
+fn main() {
+    // ウィンドウを作る前に宣言する（`extrun` 本体と同じ理由）
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+
+    let template = layout::build();
+    let mut app = App {
+        form: Form::default(),
+        expanded: false,
+        folded_height: template.folded_height,
+        expanded_height: template.expanded_height,
+        updating: false,
+    };
+
+    let result = show_modal(
+        &template.words,
+        Some(dialog_proc),
+        &mut app as *mut App as LPARAM,
+    );
+
+    // 組み立てを誤ると -1 が返るだけで理由が出ないので、黙って捨てない
+    if result == -1 {
+        extrun::show_error_dialog(
+            "設定づくり",
+            "画面を組み立てられませんでした。\nExtRun の作者に知らせてください。",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ダイアログ手続き
+// ---------------------------------------------------------------------------
+
+unsafe fn app_of(hwnd: HWND) -> *mut App {
+    unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut App }
+}
+
+unsafe extern "system" fn dialog_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> isize {
+    unsafe {
+        match msg {
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
+                let app = &mut *(lparam as *mut App);
+                init(hwnd, app);
+                1
+            }
+
+            WM_COMMAND => {
+                let app = app_of(hwnd);
+                if app.is_null() {
+                    return 0;
+                }
+                let app = &mut *app;
+
+                let id = (wparam & 0xFFFF) as u16;
+                let notify = ((wparam >> 16) & 0xFFFF) as u32;
+                command(hwnd, app, id, notify)
+            }
+
+            _ => 0,
+        }
+    }
+}
+
+/// 画面を初期状態にする
+unsafe fn init(hwnd: HWND, app: &mut App) {
+    unsafe {
+        app.updating = true;
+
+        // --- コンボの中身 ---
+        combo_fill(hwnd, ID_EXT_KIND, &extension_kinds());
+        combo_fill(
+            hwnd,
+            ID_PLACE,
+            &[
+                "メニューの一番上の階層".to_string(),
+                "新しいサブメニューを作る".to_string(),
+            ],
+        );
+        combo_fill(
+            hwnd,
+            ID_WHEN,
+            &[
+                "いつも表示する".to_string(),
+                "1 つだけ選んだとき（single）".to_string(),
+                "2 つ以上選んだとき（multi）".to_string(),
+            ],
+        );
+        combo_fill(hwnd, ID_INSERT_LIST, &insert_choices());
+        combo_select(hwnd, ID_INSERT_LIST, 0);
+
+        write_form(hwnd, &app.form);
+        app.updating = false;
+
+        // 詳細設定は畳んだ状態から始める
+        fold(hwnd, app, false);
+        rebuild(hwnd, app);
+
+        // 最初に触るのは名前の欄
+        SetFocus(GetDlgItem(hwnd, ID_NAME as i32));
+    }
+}
+
+/// ボタンや欄からの通知をさばく
+unsafe fn command(hwnd: HWND, app: &mut App, id: u16, notify: u32) -> isize {
+    unsafe {
+        match id {
+            _ if id == IDCANCEL as u16 => {
+                EndDialog(hwnd, 0);
+                return 1;
+            }
+
+            ID_FOLD => {
+                let expanded = !app.expanded;
+                fold(hwnd, app, expanded);
+                return 1;
+            }
+
+            ID_COPY => {
+                let text = app.form.to_config();
+                if clip::copy(hwnd, &text) {
+                    // 押したことが分かるように、欄の中身を選択して見せる
+                    let output = GetDlgItem(hwnd, ID_OUTPUT as i32);
+                    SendMessageW(output, EM_SETSEL, 0, -1);
+                    SetFocus(output);
+                } else {
+                    extrun::show_error_dialog(
+                        "設定づくり",
+                        "クリップボードを開けませんでした。\n他のアプリが使っている間は失敗することがあります。",
+                    );
+                }
+                return 1;
+            }
+
+            ID_APP_BROWSE => {
+                if let Some(path) = clip::pick_executable(hwnd) {
+                    set_text(hwnd, ID_APP, &path);
+                    read_form(hwnd, app);
+                    rebuild(hwnd, app);
+                }
+                return 1;
+            }
+
+            ID_INSERT => {
+                insert_placeholder(hwnd, app);
+                return 1;
+            }
+
+            ID_EXT_KIND if notify == CBN_SELCHANGE => {
+                let index = combo_selection(hwnd, ID_EXT_KIND);
+                // 0 は「自分で指定」。拡張子の欄へ移って中身を選択状態にする
+                if index == 0 {
+                    let field = GetDlgItem(hwnd, ID_EXT as i32);
+                    SetFocus(field);
+                    SendMessageW(field, EM_SETSEL, 0, -1);
+                } else if let Some(preset) = presets::PRESETS.get(index as usize - 1) {
+                    app.updating = true;
+                    set_text(hwnd, ID_EXT, preset.extensions);
+                    app.updating = false;
+                }
+                read_form(hwnd, app);
+                rebuild(hwnd, app);
+                return 1;
+            }
+
+            _ => {}
+        }
+
+        // 入力欄の書き換えとチェックの切り替えは、まとめて組み立て直しに回す
+        let changed = matches!(notify, EN_CHANGE | BN_CLICKED | CBN_SELCHANGE);
+        if changed && !app.updating {
+            read_form(hwnd, app);
+            sync_enabled(hwnd, &app.form);
+            rebuild(hwnd, app);
+            return 1;
+        }
+
+        0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// フォームと画面のやりとり
+// ---------------------------------------------------------------------------
+
+/// 画面 → `Form`
+unsafe fn read_form(hwnd: HWND, app: &mut App) {
+    unsafe {
+        let form = &mut app.form;
+
+        form.name = get_text(hwnd, ID_NAME);
+        form.key = get_text(hwnd, ID_KEY);
+        form.app = get_text(hwnd, ID_APP);
+        form.args = get_text(hwnd, ID_ARGS);
+        form.no_args = checked(hwnd, ID_NO_ARGS);
+        form.all_mode = checked(hwnd, ID_ALL_MODE);
+
+        form.extensions = get_text(hwnd, ID_EXT);
+        form.ext_style = if checked(hwnd, ID_EXT_PERITEM) {
+            ExtStyle::PerItem
+        } else {
+            ExtStyle::Section
+        };
+
+        form.placement = match combo_selection(hwnd, ID_PLACE) {
+            1 => Placement::NewSubmenu,
+            _ => Placement::Root,
+        };
+        form.submenu_name = get_text(hwnd, ID_SUB_NAME);
+        form.submenu_key = get_text(hwnd, ID_SUB_KEY);
+        form.separator = checked(hwnd, ID_SEPARATOR);
+
+        form.confirm = checked(hwnd, ID_CONFIRM);
+        form.confirm_message = get_text(hwnd, ID_CONFIRM_MESSAGE);
+        form.admin = checked(hwnd, ID_ADMIN);
+        form.wait = checked(hwnd, ID_WAIT);
+        form.delay = checked(hwnd, ID_DELAY);
+        form.delay_ms = get_text(hwnd, ID_DELAY_MS);
+        form.when = match combo_selection(hwnd, ID_WHEN) {
+            1 => WhenKind::Single,
+            2 => WhenKind::Multi,
+            _ => WhenKind::Always,
+        };
+        form.dir = get_text(hwnd, ID_DIR);
+        form.icon = get_text(hwnd, ID_ICON);
+    }
+}
+
+/// `Form` → 画面（起動時に 1 回だけ）
+unsafe fn write_form(hwnd: HWND, form: &Form) {
+    unsafe {
+        set_text(hwnd, ID_EXT, &form.extensions);
+        set_text(hwnd, ID_DELAY_MS, &form.delay_ms);
+
+        // ひな型に当てはまれば選んでおく。当てはまらなければ「自分で指定」
+        let kind = presets::find(&form.extensions).map_or(0, |index| index as i32 + 1);
+        combo_select(hwnd, ID_EXT_KIND, kind);
+        combo_select(hwnd, ID_PLACE, 0);
+        combo_select(hwnd, ID_WHEN, 0);
+        check(hwnd, ID_EXT_SECTION, true);
+    }
+}
+
+/// 効かない欄を灰色にする
+///
+/// 消すのではなく灰色にするのは、消すとレイアウトが動いて「さっきまであった
+/// 欄が無い」という探し方をさせてしまうため。
+unsafe fn sync_enabled(hwnd: HWND, form: &Form) {
+    unsafe {
+        enable(hwnd, ID_ARGS, !form.no_args);
+        enable(hwnd, ID_INSERT_LIST, !form.no_args);
+        enable(hwnd, ID_INSERT, !form.no_args);
+
+        let submenu = form.placement == Placement::NewSubmenu;
+        enable(hwnd, ID_SUB_NAME, submenu);
+        enable(hwnd, ID_SUB_KEY, submenu);
+
+        enable(hwnd, ID_CONFIRM_MESSAGE, form.confirm);
+        enable(hwnd, ID_DELAY_MS, form.delay);
+    }
+}
+
+/// ④ を組み立て直す
+unsafe fn rebuild(hwnd: HWND, app: &App) {
+    unsafe {
+        let text = app.form.to_config();
+        set_text(hwnd, ID_OUTPUT, &text);
+        set_text(hwnd, ID_PASTE_HINT, app.form.paste_hint());
+
+        let used = presets::used_placeholders(&app.form.args);
+        set_text(hwnd, ID_PLACEHOLDER_HINT, &used.join("　"));
+    }
+}
+
+/// 詳細設定を開く / 閉じる
+///
+/// **コントロールは動かさない。** 最初から下端に置いてあるものを見せ隠しして、
+/// ダイアログの高さだけを付け替える。位置を計算し直すと、開閉のたびに
+/// レイアウトがずれる余地ができる。
+unsafe fn fold(hwnd: HWND, app: &mut App, expanded: bool) {
+    unsafe {
+        app.expanded = expanded;
+        let show = if expanded { SW_SHOW } else { SW_HIDE };
+
+        for id in DETAIL_IDS {
+            ShowWindow(GetDlgItem(hwnd, *id as i32), show);
+        }
+        for offset in 0..DETAIL_DECOR_COUNT {
+            ShowWindow(GetDlgItem(hwnd, (DETAIL_DECOR_FIRST + offset) as i32), show);
+        }
+
+        set_text(
+            hwnd,
+            ID_FOLD,
+            if expanded {
+                "詳細設定を閉じる ▲"
+            } else {
+                "詳細設定を開く ▼"
+            },
+        );
+
+        // 下の帯は開閉に合わせて動かす（この 2 つだけは位置が変わる）
+        let dlu = if expanded {
+            app.expanded_height
+        } else {
+            app.folded_height
+        };
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 4,
+            bottom: dlu as i32,
+        };
+        MapDialogRect(hwnd, &mut rect);
+        resize(hwnd, rect.bottom);
+
+        let footer_dlu = dlu - 8 - 14;
+        let mut footer = RECT {
+            left: 0,
+            top: 0,
+            right: 4,
+            bottom: footer_dlu as i32,
+        };
+        MapDialogRect(hwnd, &mut footer);
+        move_footer(hwnd, footer.bottom);
+    }
+}
+
+/// クライアント領域の高さを付け替える
+///
+/// **画面からはみ出すなら、はみ出したぶんだけ ④ の欄を低くする。**
+/// 1920×1080 の 150% のように「その画面にしては拡大率が大きい」組み合わせでは、
+/// 開いた状態が作業領域を 60〜80 px 超える。伸縮してよいのは ④ だけで、
+/// フォームの行は縮めない（読めなくなる）。
+unsafe fn resize(hwnd: HWND, client_height: i32) {
+    unsafe {
+        let mut window = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        GetWindowRect(hwnd, &mut window);
+        let mut client = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        GetClientRect(hwnd, &mut client);
+
+        let chrome = (window.bottom - window.top) - client.bottom;
+        let mut wanted = client_height + chrome;
+
+        let mut work = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work as *mut RECT as *mut _, 0) != 0 {
+            let available = work.bottom - work.top;
+            if wanted > available {
+                shrink_output(hwnd, wanted - available);
+                wanted = available;
+            }
+        }
+
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            0,
+            0,
+            window.right - window.left,
+            wanted,
+            SWP_NOMOVE | SWP_NOZORDER,
+        );
+    }
+}
+
+/// ④ の欄を低くする（下限は 3 行ぶん）
+unsafe fn shrink_output(hwnd: HWND, by: i32) {
+    unsafe {
+        let output = GetDlgItem(hwnd, ID_OUTPUT as i32);
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        GetWindowRect(output, &mut rect);
+
+        let mut line = RECT {
+            left: 0,
+            top: 0,
+            right: 4,
+            bottom: 24,
+        };
+        MapDialogRect(hwnd, &mut line);
+
+        let height = (rect.bottom - rect.top - by).max(line.bottom);
+        SetWindowPos(
+            output,
+            null_mut(),
+            0,
+            0,
+            rect.right - rect.left,
+            height,
+            SWP_NOMOVE | SWP_NOZORDER,
+        );
+    }
+}
+
+/// 下の帯（説明と「閉じる」）を高さに合わせて動かす
+///
+/// **開閉で位置が変わるのはこの 2 つだけ。** フォームの欄はどれも動かさない。
+unsafe fn move_footer(hwnd: HWND, top: i32) {
+    unsafe {
+        // 説明は文字の高さぶん下げて、ボタンと中心を揃える
+        move_to(hwnd, ID_FOOTER_NOTE, top + 3);
+        move_to(hwnd, IDCANCEL as u16, top);
+    }
+}
+
+/// 横位置はそのままに、縦だけ動かす
+unsafe fn move_to(hwnd: HWND, id: u16, top: i32) {
+    unsafe {
+        let control = GetDlgItem(hwnd, id as i32);
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        GetWindowRect(control, &mut rect);
+
+        let mut point = [rect.left, rect.top];
+        ScreenToClient(hwnd, point.as_mut_ptr() as *mut _);
+
+        SetWindowPos(
+            control,
+            null_mut(),
+            point[0],
+            top,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER,
+        );
+    }
+}
+
+/// プレースホルダーを引数欄のカーソル位置に挿し込む
+unsafe fn insert_placeholder(hwnd: HWND, app: &mut App) {
+    unsafe {
+        let index = combo_selection(hwnd, ID_INSERT_LIST);
+        let Some((mark, _)) = presets::PLACEHOLDERS.get(index.max(0) as usize) else {
+            return;
+        };
+
+        let args = GetDlgItem(hwnd, ID_ARGS as i32);
+        SetFocus(args);
+
+        // 何も選ばずに押されたときのために、選択範囲を確かめてから置き換える
+        SendMessageW(args, EM_GETSEL, 0, 0);
+        let wide = to_wide(mark);
+        SendMessageW(args, EM_REPLACESEL, 1, wide.as_ptr() as LPARAM);
+
+        read_form(hwnd, app);
+        rebuild(hwnd, app);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// コンボの中身
+// ---------------------------------------------------------------------------
+
+/// 「対象の種類」に並べるもの
+///
+/// **並びは「自分で指定 → ひな型」**（書く回数の多い順）。
+/// 設定ファイルから読んだ別名は Phase 5 でこのあいだに入る。
+fn extension_kinds() -> Vec<String> {
+    let mut kinds = vec![presets::CUSTOM.to_string()];
+    for preset in presets::PRESETS {
+        kinds.push(format!("{}   {}", preset.label, preset.extensions));
+    }
+    kinds
+}
+
+fn insert_choices() -> Vec<String> {
+    presets::PLACEHOLDERS
+        .iter()
+        .map(|(mark, meaning)| format!("{}   {}", mark, meaning))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Win32 の細かいところ
+// ---------------------------------------------------------------------------
+
+unsafe fn get_text(hwnd: HWND, id: u16) -> String {
+    unsafe {
+        let control = GetDlgItem(hwnd, id as i32);
+        let length = GetWindowTextLengthW(control);
+        if length <= 0 {
+            return String::new();
+        }
+        let mut buffer = vec![0u16; length as usize + 1];
+        let written = GetWindowTextW(control, buffer.as_mut_ptr(), buffer.len() as i32);
+        String::from_utf16_lossy(&buffer[..written as usize])
+    }
+}
+
+unsafe fn set_text(hwnd: HWND, id: u16, text: &str) {
+    unsafe {
+        let wide = to_wide(text);
+        SetDlgItemTextW(hwnd, id as i32, wide.as_ptr());
+    }
+}
+
+unsafe fn checked(hwnd: HWND, id: u16) -> bool {
+    unsafe { SendMessageW(GetDlgItem(hwnd, id as i32), BM_GETCHECK, 0, 0) == 1 }
+}
+
+unsafe fn check(hwnd: HWND, id: u16, on: bool) {
+    unsafe {
+        SendMessageW(
+            GetDlgItem(hwnd, id as i32),
+            BM_SETCHECK,
+            if on { 1 } else { 0 },
+            0,
+        );
+    }
+}
+
+unsafe fn enable(hwnd: HWND, id: u16, on: bool) {
+    unsafe {
+        EnableWindow(GetDlgItem(hwnd, id as i32), if on { 1 } else { 0 });
+    }
+}
+
+unsafe fn combo_fill(hwnd: HWND, id: u16, items: &[String]) {
+    unsafe {
+        let combo = GetDlgItem(hwnd, id as i32);
+        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        for item in items {
+            let wide = to_wide(item);
+            SendMessageW(combo, CB_ADDSTRING, 0, wide.as_ptr() as LPARAM);
+        }
+        SendMessageW(combo, CB_SETCURSEL, 0, 0);
+    }
+}
+
+unsafe fn combo_select(hwnd: HWND, id: u16, index: i32) {
+    unsafe {
+        SendMessageW(
+            GetDlgItem(hwnd, id as i32),
+            CB_SETCURSEL,
+            index as WPARAM,
+            0,
+        );
+    }
+}
+
+unsafe fn combo_selection(hwnd: HWND, id: u16) -> i32 {
+    unsafe { SendMessageW(GetDlgItem(hwnd, id as i32), CB_GETCURSEL, 0, 0) as i32 }
+}
