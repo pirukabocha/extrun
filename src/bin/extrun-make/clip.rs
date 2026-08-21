@@ -5,6 +5,8 @@
 設定ファイルには書き戻さないので、作ったものはクリップボード経由で渡す。
 */
 
+use std::path::Path;
+
 use extrun::dialog::to_wide;
 use windows_sys::Win32::Foundation::{HANDLE, HWND};
 use windows_sys::Win32::System::DataExchange::{
@@ -14,6 +16,8 @@ use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock,
 use windows_sys::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
+use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 const CF_UNICODETEXT: u32 = 13;
 
@@ -63,6 +67,30 @@ pub fn pick_executable(hwnd: HWND) -> Option<String> {
         "起動するアプリを選ぶ",
         "プログラム (*.exe;*.bat;*.cmd)\0*.exe;*.bat;*.cmd\0すべてのファイル\0*.*\0\0",
     )
+}
+
+/// 設定ファイルを、関連付けられたアプリで開く
+///
+/// **貼る先をその場で開けるようにするためのもの。** コピー → 開く → 貼る、
+/// という流れがボタン 2 つで済む。
+///
+/// 開くだけなので `ShellExecuteW`（`:admin` の `ShellExecuteExW` とは別物）。
+/// 失敗しても知らせない — 関連付けが無い環境では「プログラムから開く」の
+/// 画面が出るのが Windows の作法で、こちらから言えることが無い。
+pub fn open_config(hwnd: HWND, path: &Path) {
+    let verb = to_wide("open");
+    let file = to_wide(&path.to_string_lossy());
+
+    unsafe {
+        ShellExecuteW(
+            hwnd,
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
 }
 
 /// アイコンの入ったファイルを選ばせる

@@ -81,6 +81,7 @@ pub const ID_SEPARATOR: u16 = 123;
 pub const ID_PASTE_HINT: u16 = 130;
 pub const ID_OUTPUT: u16 = 131;
 pub const ID_COPY: u16 = 132;
+pub const ID_OPEN_CONFIG: u16 = 138;
 
 pub const ID_TRY_PATH: u16 = 133;
 pub const ID_TRY_BROWSE: u16 = 134;
@@ -542,15 +543,15 @@ fn group2a_height() -> i16 {
 
 fn group2b_height() -> i16 {
     GROUP_TOP
-        + LABEL_H
-        + TIGHT
-        + EDIT_H
-        + LOOSE
-        + LABEL_H
-        + TIGHT
-        + EDIT_H
-        + LOOSE
         + CHECK_H
+        + LOOSE
+        + LABEL_H
+        + TIGHT
+        + EDIT_H
+        + LOOSE
+        + LABEL_H
+        + TIGHT
+        + EDIT_H
         + GROUP_BOTTOM
 }
 
@@ -568,7 +569,7 @@ fn column2(words: &mut Vec<u16>, top: i16) {
         frame,
         top,
         group2a_height(),
-        "② どのファイルで表示するか",
+        "② どの拡張子で表示するか",
     );
 
     label(words, x, &mut y, INNER_W, "対象の種類");
@@ -638,15 +639,21 @@ fn column2(words: &mut Vec<u16>, top: i16) {
     let third = top + group2a_height() + 8;
     let mut y = third + GROUP_TOP;
 
-    frame_box(
-        words,
-        frame,
-        third,
-        group2b_height(),
-        "③ メニューのどこに表示するか",
-    );
+    frame_box(words, frame, third, group2b_height(), "③ 特殊表示");
 
-    label(words, x, &mut y, INNER_W, "置き場所");
+    // **区切り線を先頭に置く。** サブメニューの欄の後ろにあると、
+    // サブメニューだけに効く設定に見えてしまう
+    check(
+        words,
+        x,
+        &mut y,
+        INNER_W,
+        ID_SEPARATOR,
+        "この項目の前に区切り線を入れる（---）",
+    );
+    y += LOOSE;
+
+    label(words, x, &mut y, INNER_W, "メニューの階層位置");
     push_item(
         words,
         STYLE_COMBOBOX,
@@ -689,16 +696,6 @@ fn column2(words: &mut Vec<u16>, top: i16) {
         ATOM_EDIT,
         "",
     );
-    y += EDIT_H + LOOSE;
-
-    check(
-        words,
-        x,
-        &mut y,
-        INNER_W,
-        ID_SEPARATOR,
-        "この項目の前に区切り線を入れる（---）",
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -736,22 +733,35 @@ fn band(words: &mut Vec<u16>, elastic: Elastic) {
         STYLE_STATIC,
         x,
         y + 3,
-        BAND_INNER - 100,
+        BAND_INNER - 200,
         LABEL_H,
         ID_PASTE_HINT,
         ATOM_STATIC,
         "",
     );
+    // **コピー → 開く → 貼る、の順に並べる。** この 2 つは「作った文字列を
+    // どうするか」で続いているので、離さない
     push_item(
         words,
         STYLE_BUTTON,
-        x + BAND_INNER - 90,
+        x + BAND_INNER - 194,
         y,
         90,
         BUTTON_HEIGHT,
         ID_COPY,
         ATOM_BUTTON,
         "クリップボードにコピー",
+    );
+    push_item(
+        words,
+        STYLE_BUTTON,
+        x + BAND_INNER - 100,
+        y,
+        100,
+        BUTTON_HEIGHT,
+        ID_OPEN_CONFIG,
+        ATOM_BUTTON,
+        "設定ファイルを開く",
     );
     y += BUTTON_HEIGHT + 3;
 

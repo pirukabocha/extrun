@@ -13,6 +13,7 @@
 */
 
 mod clip;
+mod edits;
 mod existing;
 mod form;
 mod iconpick;
@@ -183,7 +184,10 @@ unsafe extern "system" fn dialog_proc(
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
                 let app = &mut *(lparam as *mut App);
                 init(hwnd, app);
-                1
+                // **0 を返す。** 1 を返すと Windows が最初のタブストップへ
+                // フォーカスを置き直し、`init` の `SetFocus`（名前の欄）が
+                // 上書きされる。最初に触るのはコピーのボタンではない
+                0
             }
 
             WM_COMMAND => {
@@ -241,6 +245,9 @@ unsafe fn init(hwnd: HWND, app: &mut App) {
         app.updating = true;
 
         // --- コンボの中身 ---
+        // Win32 の EDIT は Ctrl+A を自前では扱わない
+        edits::enable_select_all(hwnd);
+
         let (kinds, labels) = extension_kinds(&app.existing);
         app.ext_kinds = kinds;
         combo_fill(hwnd, ID_EXT_KIND, &labels);
@@ -248,6 +255,9 @@ unsafe fn init(hwnd: HWND, app: &mut App) {
         combo_fill(hwnd, ID_ALIAS, &alias_choices(&app.existing));
         combo_select(hwnd, ID_ALIAS, 0);
         set_text(hwnd, ID_EXISTING, &app.existing.status());
+        if app.existing.path.is_none() {
+            enable(hwnd, ID_OPEN_CONFIG, false);
+        }
         if app.existing.aliases.is_empty() {
             enable(hwnd, ID_ALIAS, false);
             enable(hwnd, ID_ALIAS_INSERT, false);
@@ -325,6 +335,13 @@ unsafe fn command(hwnd: HWND, app: &mut App, id: u16, notify: u32) -> isize {
                         "設定づくり",
                         "クリップボードを開けませんでした。\n他のアプリが使っている間は失敗することがあります。",
                     );
+                }
+                return 1;
+            }
+
+            ID_OPEN_CONFIG => {
+                if let Some(path) = &app.existing.path {
+                    clip::open_config(hwnd, path);
                 }
                 return 1;
             }
@@ -491,6 +508,12 @@ unsafe fn sync_enabled(hwnd: HWND, form: &Form) {
             ID_SECTION_SPOT,
             choosable && form.ext_style.needs_section(),
         );
+
+        // 「貼り先のセクションのまま使う」は拡張子を書かないので、
+        // 打てるままにしておくと「書いたのに効かない」ことになる
+        let uses_extensions = form.ext_style != ExtStyle::Inherit;
+        enable(hwnd, ID_EXT_KIND, uses_extensions);
+        enable(hwnd, ID_EXT, uses_extensions);
 
         enable(hwnd, ID_CONFIRM_MESSAGE, form.confirm);
         enable(hwnd, ID_DELAY_MS, form.delay);

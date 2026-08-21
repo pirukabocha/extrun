@@ -47,7 +47,9 @@ use windows_sys::Win32::Graphics::Gdi::{
     DrawFocusRect, FillRect, GetSysColorBrush, HDC, InvalidateRect,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, VK_LEFT, VK_RIGHT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, GetFocus, SetFocus, VK_LEFT, VK_RIGHT,
+};
 use windows_sys::Win32::UI::Shell::ExtractIconExW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -653,6 +655,9 @@ unsafe extern "system" fn dialog_proc(
                     SetWindowLongPtrW(grid, GWLP_WNDPROC, grid_proc as *const () as isize);
                 ORIGINAL_GRID_PROC.store(original, Ordering::Relaxed);
 
+                // こちらの入力欄でも Ctrl+A を効かせる
+                crate::edits::enable_select_all(dialog);
+
                 // 「起動するアプリ」が空なら、そのボタンは押せなくする
                 if picker.app.is_empty() {
                     EnableWindow(GetDlgItem(dialog, ID_PRESET_APP as i32), 0);
@@ -661,7 +666,11 @@ unsafe extern "system" fn dialog_proc(
                 let wide = to_wide(&picker.path);
                 SetDlgItemTextW(dialog, ID_PATH as i32, wide.as_ptr());
                 reload(dialog, picker);
-                1
+
+                // 開いたらすぐ格子を操作できるようにする（1 を返すと
+                // 最初のタブストップ＝パスの欄にフォーカスが行く）
+                SetFocus(GetDlgItem(dialog, ID_GRID as i32));
+                0
             }
 
             // オーナードローで高さが要るが、これは一覧を詰める前に 1 度だけ
