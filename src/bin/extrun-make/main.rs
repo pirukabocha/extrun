@@ -20,6 +20,7 @@ mod iconpick;
 mod layout;
 mod live;
 mod presets;
+mod tips;
 
 use std::ptr::null_mut;
 
@@ -302,6 +303,10 @@ unsafe fn init(hwnd: HWND, app: &mut App) {
         // 詳細設定は畳んだ状態から始める
         fold(hwnd, app, false);
         rebuild(hwnd, app);
+
+        // **入力欄の差し替えより後。** TTF_SUBCLASS も手続きを差し替えるので、
+        // 順番が逆だと片方が失われる
+        tips::attach(hwnd);
 
         // 最初に触るのは名前の欄
         SetFocus(GetDlgItem(hwnd, ID_NAME as i32));

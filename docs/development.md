@@ -53,6 +53,7 @@ extrun/
 │   │   ├── iconpick.rs     #   :icon の番号を一覧から選ぶ画面
 │   │   ├── existing.rs     #   今ある設定ファイルを読む（別名・プレビューの前置き）
 │   │   ├── edits.rs        #   入力欄に Ctrl+A を効かせる
+│   │   └── tips.rs         #   欄ごとのツールチップ
 │   │   ├── presets.rs      #   対象の種類のひな型
 │   │   └── clip.rs         #   クリップボードとファイル選択
 │   ├── config.rs       # 設定ファイルのパース
